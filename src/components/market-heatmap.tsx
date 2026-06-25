@@ -301,8 +301,12 @@ function getTurnoverTrend(delta: number) {
 }
 
 function getLiveTurnoverAmount(code: string, fallback: number, quotes: QuoteMap) {
-  const live = quotes[code]?.turnoverAmount;
-  return Number.isFinite(live) && (live ?? 0) > 0 ? live ?? 0 : fallback;
+  if (code in quotes) {
+    const live = quotes[code].turnoverAmount;
+    return Number.isFinite(live) && live >= 0 ? live : fallback;
+  }
+
+  return fallback;
 }
 
 function normalizeSizeValue(value: number) {
