@@ -43,7 +43,7 @@ import {
   type TreemapResponse,
 } from "@/lib/market-heatmap";
 
-type QuoteMap = Record<string, { price: number; changePct: number }>;
+type QuoteMap = Record<string, { price: number; changePct: number; turnoverAmount: number }>;
 
 type StockRect = {
   code: string;
@@ -127,6 +127,7 @@ type PriceColorMode = "red-rise" | "green-rise";
 type ThemeColorKey = "green" | "red" | "blue" | "violet";
 type DisplayMode = "dark" | "light";
 type SettingsTab = "appearance" | "help" | "project";
+type HeatmapSizeMode = "marketCap" | "turnover";
 
 const refreshIntervalMs = 8000;
 const marketOptions: MarketKey[] = ["all", "sse", "szse", "hs300", "zza500", "cyb", "kcb"];
@@ -297,6 +298,61 @@ function getTurnoverTrend(delta: number) {
   }
 
   return "flat";
+}
+
+function getLiveTurnoverAmount(code: string, fallback: number, quotes: QuoteMap) {
+  const live = quotes[code]?.turnoverAmount;
+  return Number.isFinite(live) && (live ?? 0) > 0 ? live ?? 0 : fallback;
+}
+
+function normalizeSizeValue(value: number) {
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+function getStockSizeValue(
+  stock: { code: string; value: number; turnoverAmount: number },
+  quotes: QuoteMap,
+  sizeMode: HeatmapSizeMode
+) {
+  if (sizeMode === "turnover") {
+    return normalizeSizeValue(getLiveTurnoverAmount(stock.code, stock.turnoverAmount, quotes));
+  }
+
+  return stock.value;
+}
+
+function applySizeModeToTreemapData(
+  data: TreemapResponse,
+  quotes: QuoteMap,
+  sizeMode: HeatmapSizeMode
+): TreemapResponse {
+  if (sizeMode === "marketCap") {
+    return data;
+  }
+
+  const nodes = data.nodes
+    .map((board) => {
+      const children = board.children
+        .map((stock) => ({
+          ...stock,
+          value: getStockSizeValue(stock, quotes, sizeMode),
+        }))
+        .sort((left, right) => right.value - left.value);
+      const total = children.reduce((sum, stock) => sum + stock.value, 0);
+
+      return {
+        ...board,
+        children,
+        value: total,
+        stockCount: children.length,
+      };
+    })
+    .sort((left, right) => right.value - left.value);
+
+  return {
+    ...data,
+    nodes,
+  };
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement) {
@@ -1381,6 +1437,7 @@ function SettingsDrawer({
   onDisplayModeChange,
   onThemeColorChange,
   onPriceColorModeChange,
+  areaTipMessage,
 }: {
   open: boolean;
   tab: SettingsTab;
@@ -1389,6 +1446,7 @@ function SettingsDrawer({
   displayMode: DisplayMode;
   themeColor: ThemeColorKey;
   priceColorMode: PriceColorMode;
+  areaTipMessage: string;
   onClose: () => void;
   onTabChange: (tab: SettingsTab) => void;
   onLocaleChange: (locale: Locale) => void;
@@ -1402,7 +1460,7 @@ function SettingsDrawer({
 
   const isEnglish = locale === "en";
   const helpItems = [
-    messages.tipArea,
+    areaTipMessage,
     messages.tipColor,
     messages.tipDoubleClick,
     messages.tipZoom,
@@ -1650,6 +1708,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
   const [boardFilter, setBoardFilter] = useState(allBoardsValue);
   const [trendFilter, setTrendFilter] = useState(allTrendsValue);
+  const [sizeMode, setSizeMode] = useState<HeatmapSizeMode>("marketCap");
   const [marketSummaries, setMarketSummaries] = useState<Partial<Record<MarketKey, MarketSummary>>>({});
   const [treemapData, setTreemapData] = useState<TreemapResponse | null>(null);
   const [quotes, setQuotes] = useState<QuoteMap>({});
@@ -1746,6 +1805,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedDisplayMode = window.localStorage.getItem("heatmap-display-mode");
       const storedTheme = window.localStorage.getItem("heatmap-theme-color");
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
+      const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
 
       if (storedLocale === "zh" || storedLocale === "en") {
         setLocale(storedLocale);
@@ -1758,6 +1818,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
       if (storedPriceColor === "red-rise" || storedPriceColor === "green-rise") {
         setPriceColorMode(storedPriceColor);
+      }
+      if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
+        setSizeMode(storedSizeMode);
       }
     } catch {
       /* Preferences are optional. */
@@ -1815,6 +1878,22 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       /* Preferences are optional. */
     }
   }, [preferencesReady, priceColorMode]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem("heatmap-size-mode", sizeMode);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, sizeMode]);
+
+  const areaTipMessage = useMemo(
+    () => (sizeMode === "turnover" ? messages.tipAreaTurnover : messages.tipAreaMarketCap),
+    [messages.tipAreaMarketCap, messages.tipAreaTurnover, sizeMode]
+  );
 
   const refreshSize = useCallback(() => {
     const target = viewportRef.current;
@@ -2055,6 +2134,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     setView({ scale: 1, x: 0, y: 0 });
   }, [boardFilter, trendFilter]);
 
+  useEffect(() => {
+    setView({ scale: 1, x: 0, y: 0 });
+  }, [sizeMode]);
+
   const boardFilterOptions = useMemo(() => treemapData?.nodes ?? [], [treemapData]);
 
   const visibleTreemapData = useMemo<TreemapResponse | null>(() => {
@@ -2088,7 +2171,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           flatCount += 1;
         }
 
-        turnoverAmount += stock.turnoverAmount;
+        turnoverAmount += getLiveTurnoverAmount(stock.code, stock.turnoverAmount, quotes);
       }
 
       return {
@@ -2152,7 +2235,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
             flatCount += 1;
           }
 
-          turnoverAmount += stock.turnoverAmount;
+          turnoverAmount += getLiveTurnoverAmount(stock.code, stock.turnoverAmount, quotes);
           totalStockCount += 1;
         }
       }
@@ -2194,8 +2277,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     };
   }, [visibleTreemapData]);
 
+  const sizedTreemapData = useMemo(
+    () => (visibleTreemapData ? applySizeModeToTreemapData(visibleTreemapData, quotes, sizeMode) : null),
+    [quotes, sizeMode, visibleTreemapData]
+  );
+
   const layout = useMemo(() => {
-    if (!visibleTreemapData) {
+    if (!sizedTreemapData) {
       return {
         stockRects: [] as StockRect[],
         boardRects: [] as BoardRect[],
@@ -2208,7 +2296,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     const stockRects: StockRect[] = [];
 
     const boardBoxes = binaryTreemap(
-      visibleTreemapData.nodes.map((board) => ({ item: board, value: board.value })),
+      sizedTreemapData.nodes.map((board) => ({ item: board, value: board.value })),
       0,
       0,
       canvasSize.width,
@@ -2343,7 +2431,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     return { stockRects, boardRects, subBoardRects };
-  }, [canvasSize.height, canvasSize.width, quotes, visibleTreemapData]);
+  }, [canvasSize.height, canvasSize.width, quotes, sizedTreemapData]);
 
   useEffect(() => {
     lastStockRectsRef.current = layout.stockRects;
@@ -3810,6 +3898,47 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </div>
 
               <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
+                <p
+                  className={cn(
+                    "font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+                    isEnglish ? "text-[9px]" : "text-[10px]"
+                  )}
+                >
+                  {messages.sizeModeLabel}
+                </p>
+                <div className={cn("mt-1 grid grid-cols-2 gap-1", isEnglish && "gap-0.5")}>
+                  <button
+                    type="button"
+                    onClick={() => setSizeMode("marketCap")}
+                    aria-pressed={sizeMode === "marketCap"}
+                    className={cn(
+                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
+                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
+                      sizeMode === "marketCap"
+                        ? "border-brand/70 bg-brand/18 text-foreground"
+                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {messages.sizeModeMarketCap}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSizeMode("turnover")}
+                    aria-pressed={sizeMode === "turnover"}
+                    className={cn(
+                      "h-7 border px-1 text-center font-semibold leading-tight transition-colors",
+                      isEnglish ? "text-[9.5px]" : "text-[10.5px]",
+                      sizeMode === "turnover"
+                        ? "border-brand/70 bg-brand/18 text-foreground"
+                        : "border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {messages.sizeModeTurnover}
+                  </button>
+                </div>
+              </div>
+
+              <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
                 <div className="flex items-center justify-between gap-2">
                   <p
                     className={cn(
@@ -4251,7 +4380,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                         : "border-slate-700/90 bg-[#0f1319]/96 text-slate-300"
                     )}
                   >
-                    <p>{messages.tipArea.replace(/^·\s*/, "")}</p>
+                    <p>{areaTipMessage.replace(/^·\s*/, "")}</p>
                     <p>{messages.tipColor.replace(/^·\s*/, "")}</p>
                     <p>{(isMobile ? messages.tipTap : messages.tipDoubleClick).replace(/^·\s*/, "")}</p>
                     <p>{(isMobile ? messages.tipPinch : messages.tipZoom).replace(/^·\s*/, "")}</p>
@@ -4353,6 +4482,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         displayMode={displayMode}
         themeColor={themeColor}
         priceColorMode={priceColorMode}
+        areaTipMessage={areaTipMessage}
         onClose={() => setSettingsOpen(false)}
         onTabChange={setSettingsTab}
         onLocaleChange={setLocale}

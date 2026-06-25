@@ -129,6 +129,7 @@ export type TreemapResponse = {
 export type QuoteValue = {
   price: number;
   changePct: number;
+  turnoverAmount: number;
 };
 
 export type QuotesResponse = {
@@ -1099,6 +1100,7 @@ function getFallbackQuoteData(
     quotes[stock.code] = {
       price: stock.price,
       changePct: stock.changePct,
+      turnoverAmount: getStockTurnoverAmount(stock) || estimateFallbackTurnoverAmount(stock),
     };
   }
 
@@ -1212,6 +1214,7 @@ export async function getQuoteData(
     quotes[stock.code] = {
       price: quote?.price ?? stock.price,
       changePct: getChangeForPeriod(quote?.changes, period, stock.changePct),
+      turnoverAmount: quote?.turnoverAmount ?? getStockTurnoverAmount(stock),
     };
   }
 
