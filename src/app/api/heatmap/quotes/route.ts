@@ -8,6 +8,8 @@ import {
   periodFromMetricKey,
 } from "@/lib/market-heatmap";
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   const marketParam = request.nextUrl.searchParams.get("market") ?? "all";
   const metricParam = request.nextUrl.searchParams.get("metric") ?? "1";

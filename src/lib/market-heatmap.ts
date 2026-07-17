@@ -156,7 +156,16 @@ export type MarketOverviewResponse = {
 };
 
 const sinaQuoteBaseUrl = "https://hq.sinajs.cn/list=";
-const eastmoneyQuoteBaseUrl = "https://push2.eastmoney.com/api/qt/ulist.np/get";
+// 多周期涨跌优先走 clist；ulist 作为同字段备份。push2 主站常空响应，优先 push2delay。
+const eastmoneyClistHosts = [
+  "push2delay.eastmoney.com",
+  "82.push2.eastmoney.com",
+  "7.push2.eastmoney.com",
+  "48.push2.eastmoney.com",
+  "push2.eastmoney.com",
+] as const;
+const eastmoneyAsharesFs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
+const eastmoneyIndexFs = "m:0+t:5,m:1+t:1";
 const upDownDistributionUrl = "https://dq.10jqka.com.cn/fuyao/up_down_distribution/distribution/v2/realtime";
 const turnoverSummaryUrl =
   "https://dq.10jqka.com.cn/fuyao/market_analysis_api/chart/v1/get_chart_data?chart_key=turnover_minute";
@@ -202,7 +211,12 @@ const summaryRequestHeaders = {
 const quoteCacheMs = 8_000;
 const summaryCacheMs = 8_000;
 const sinaBatchSize = 220;
-const eastmoneyBatchSize = 180;
+const eastmoneyClistPageSize = 100;
+const eastmoneyClistConcurrency = 4;
+const eastmoneyClistMaxAttempts = 4;
+const eastmoneyUlistBatchSize = 180;
+const eastmoneyUlistConcurrency = 4;
+const eastmoneyUlistMaxAttempts = 4;
 const flatThreshold = 0.1;
 const eastmoneyQuoteFields = [
   "f2", // latest price
@@ -217,8 +231,6 @@ const eastmoneyQuoteFields = [
   "f109", // 5-trading-day change
   "f110", // 20-trading-day change
   "f124", // quote timestamp
-  "f127", // 3-trading-day change
-  "f160", // 10-trading-day change
 ] as const;
 
 const fallbackSnapshotSeed = fallbackMarketSnapshot as {
@@ -311,11 +323,6 @@ export function periodFromMetricKey(metric: MetricKey): HeatmapPeriodKey {
   return "day";
 }
 
-function toEastmoneySecid(code: string) {
-  const [symbol, exchange] = code.split(".");
-  return `${exchange === "SH" ? 1 : 0}.${symbol}`;
-}
-
 function parseEastmoneyCode(symbol: number | string | undefined, marketFlag: number | string | undefined) {
   const normalizedSymbol = String(symbol ?? "").trim();
   if (!normalizedSymbol) {
@@ -324,6 +331,11 @@ function parseEastmoneyCode(symbol: number | string | undefined, marketFlag: num
 
   const market = Number(marketFlag) === 1 ? "SH" : /^[489]/.test(normalizedSymbol) ? "BJ" : "SZ";
   return `${normalizedSymbol}.${market}`;
+}
+
+function toEastmoneySecid(code: string) {
+  const [symbol, exchange] = code.split(".");
+  return `${exchange === "SH" ? 1 : 0}.${symbol}`;
 }
 
 function parseEastmoneyTimestamp(value: number | string | undefined) {
@@ -572,6 +584,153 @@ function parseEastmoneyQuoteBatch(payload: unknown) {
   };
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= items.length) {
+          return;
+        }
+
+        results[current] = await worker(items[current], current);
+      }
+    })
+  );
+
+  return results;
+}
+
+async function fetchEastmoneyClistPage(fs: string, page: number, pageSize = eastmoneyClistPageSize) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= eastmoneyClistMaxAttempts; attempt += 1) {
+    // Prefer push2delay on first attempt; only rotate to other mirrors on retry.
+    const host = eastmoneyClistHosts[(attempt - 1) % eastmoneyClistHosts.length];
+    const params = new URLSearchParams({
+      pn: String(page),
+      pz: String(pageSize),
+      po: "1",
+      np: "1",
+      ut: "bd1d9ddb04089700cf9c27f6f7426281",
+      fltt: "2",
+      invt: "2",
+      fid: "f12",
+      fs,
+      fields: eastmoneyQuoteFields.join(","),
+    });
+
+    try {
+      const response = await fetch(`https://${host}/api/qt/clist/get?${params.toString()}`, {
+        headers: eastmoneyRequestHeaders,
+        next: { revalidate: 0 },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Eastmoney clist request failed: ${response.status}`);
+      }
+
+      const payload = await response.json();
+      if (!Array.isArray((payload as { data?: { diff?: unknown[] } }).data?.diff)) {
+        throw new Error("Eastmoney clist payload is invalid");
+      }
+
+      return payload;
+    } catch (error) {
+      lastError = error;
+      await sleep(120 * attempt * attempt);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Eastmoney clist request failed");
+}
+
+async function fetchEastmoneyUlistBatch(secids: string[]) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= eastmoneyUlistMaxAttempts; attempt += 1) {
+    const host = eastmoneyClistHosts[(attempt - 1) % eastmoneyClistHosts.length];
+    const params = new URLSearchParams({
+      secids: secids.join(","),
+      ut: "bd1d9ddb04089700cf9c27f6f7426281",
+      fltt: "2",
+      invt: "2",
+      fields: eastmoneyQuoteFields.join(","),
+    });
+
+    try {
+      const response = await fetch(`https://${host}/api/qt/ulist.np/get?${params.toString()}`, {
+        headers: eastmoneyRequestHeaders,
+        next: { revalidate: 0 },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Eastmoney ulist request failed: ${response.status}`);
+      }
+
+      const payload = await response.json();
+      if (!Array.isArray((payload as { data?: { diff?: unknown[] } }).data?.diff)) {
+        throw new Error("Eastmoney ulist payload is invalid");
+      }
+
+      return payload;
+    } catch (error) {
+      lastError = error;
+      await sleep(120 * attempt * attempt);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Eastmoney ulist request failed");
+}
+
+async function fetchEastmoneyClistPages(fs: string) {
+  const firstPayload = await fetchEastmoneyClistPage(fs, 1);
+  const total = toFiniteNumber((firstPayload as { data?: { total?: number | string } }).data?.total) ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / eastmoneyClistPageSize));
+  const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1);
+  const payloads = await mapWithConcurrency(pageNumbers, eastmoneyClistConcurrency, async (page) => {
+    if (page === 1) {
+      return firstPayload;
+    }
+
+    try {
+      return await fetchEastmoneyClistPage(fs, page);
+    } catch {
+      return null;
+    }
+  });
+
+  const successfulPayloads = payloads.filter((payload): payload is NonNullable<typeof payload> => payload !== null);
+  if (successfulPayloads.length === 0) {
+    throw new Error("Eastmoney clist pages are empty");
+  }
+
+  // Require most pages to succeed so week/month/year coverage stays meaningful.
+  if (successfulPayloads.length < pageCount * 0.8) {
+    throw new Error(
+      `Eastmoney clist pages incomplete: ${successfulPayloads.length}/${pageCount}`
+    );
+  }
+
+  return successfulPayloads;
+}
+
 async function fetchSinaQuoteBatch(symbols: string[]) {
   const response = await fetch(`${sinaQuoteBaseUrl}${symbols.join(",")}`, {
     headers: sinaRequestHeaders,
@@ -585,27 +744,6 @@ async function fetchSinaQuoteBatch(symbols: string[]) {
 
   const rawText = Buffer.from(await response.arrayBuffer()).toString("latin1");
   return parseSinaQuoteBatch(rawText);
-}
-
-async function fetchEastmoneyQuoteBatch(secids: string[]) {
-  const params = new URLSearchParams({
-    secids: secids.join(","),
-    ut: "bd1d9ddb04089700cf9c27f6f7426281",
-    fltt: "2",
-    invt: "2",
-    fields: eastmoneyQuoteFields.join(","),
-  });
-  const response = await fetch(`${eastmoneyQuoteBaseUrl}?${params.toString()}`, {
-    headers: eastmoneyRequestHeaders,
-    next: { revalidate: 0 },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Eastmoney quote request failed: ${response.status}`);
-  }
-
-  return parseEastmoneyQuoteBatch(await response.json());
 }
 
 function parseSinaIndexBatch(rawText: string) {
@@ -689,25 +827,13 @@ function parseEastmoneyIndexBatch(payload: unknown) {
   return summaries;
 }
 
-async function fetchEastmoneyMarketIndexSnapshotFromRemote(): Promise<MarketIndexSnapshot> {
-  const params = new URLSearchParams({
-    secids: Object.values(marketIndexSecids).join(","),
-    ut: "bd1d9ddb04089700cf9c27f6f7426281",
-    fltt: "2",
-    invt: "2",
-    fields: eastmoneyQuoteFields.join(","),
-  });
-  const response = await fetch(`${eastmoneyQuoteBaseUrl}?${params.toString()}`, {
-    headers: eastmoneyRequestHeaders,
-    next: { revalidate: 0 },
-    cache: "no-store",
-  });
+async function fetchEastmoneyMarketIndexSnapshotFromClist(): Promise<MarketIndexSnapshot> {
+  const payloads = await fetchEastmoneyClistPages(eastmoneyIndexFs);
+  const summaries: Partial<Record<MarketKey, MarketIndexValue>> = {};
 
-  if (!response.ok) {
-    throw new Error(`Eastmoney index request failed: ${response.status}`);
+  for (const payload of payloads) {
+    Object.assign(summaries, parseEastmoneyIndexBatch(payload));
   }
-
-  const summaries = parseEastmoneyIndexBatch(await response.json());
 
   if (Object.keys(summaries).length < marketKeys.length * 0.75) {
     throw new Error("Eastmoney index snapshot is incomplete");
@@ -719,6 +845,30 @@ async function fetchEastmoneyMarketIndexSnapshotFromRemote(): Promise<MarketInde
     summaries,
     source: "direct",
   };
+}
+
+async function fetchEastmoneyMarketIndexSnapshotFromUlist(): Promise<MarketIndexSnapshot> {
+  const payload = await fetchEastmoneyUlistBatch(Object.values(marketIndexSecids));
+  const summaries = parseEastmoneyIndexBatch(payload);
+
+  if (Object.keys(summaries).length < marketKeys.length * 0.75) {
+    throw new Error("Eastmoney ulist index snapshot is incomplete");
+  }
+
+  return {
+    timestamp: Date.now(),
+    updatedAt: new Date().toISOString(),
+    summaries,
+    source: "direct",
+  };
+}
+
+async function fetchEastmoneyMarketIndexSnapshotFromRemote(): Promise<MarketIndexSnapshot> {
+  try {
+    return await fetchEastmoneyMarketIndexSnapshotFromClist();
+  } catch {
+    return fetchEastmoneyMarketIndexSnapshotFromUlist();
+  }
 }
 
 async function fetchSinaMarketIndexSnapshotFromRemote(): Promise<MarketIndexSnapshot> {
@@ -756,42 +906,88 @@ async function fetchMarketIndexSnapshotFromRemote(): Promise<MarketIndexSnapshot
   }
 }
 
-async function fetchQuoteSnapshotFromRemote(): Promise<QuoteSnapshot> {
+async function fetchEastmoneyQuoteSnapshotFromClist(): Promise<QuoteSnapshot> {
+  const payloads = await fetchEastmoneyClistPages(eastmoneyAsharesFs);
+  const quotes: Record<string, RemoteQuoteValue> = {};
+  let updatedAt = "";
+
+  for (const payload of payloads) {
+    const result = parseEastmoneyQuoteBatch(payload);
+    Object.assign(quotes, result.quotes);
+    if (result.updatedAt && (!updatedAt || result.updatedAt > updatedAt)) {
+      updatedAt = result.updatedAt;
+    }
+  }
+
+  if (Object.keys(quotes).length === 0) {
+    throw new Error("Eastmoney clist quote snapshot is empty");
+  }
+
+  return {
+    timestamp: Date.now(),
+    updatedAt: updatedAt || new Date().toISOString(),
+    quotes,
+    source: "direct",
+  };
+}
+
+async function fetchEastmoneyQuoteSnapshotFromUlist(): Promise<QuoteSnapshot> {
   const secids = baselineStocks.map((stock) => toEastmoneySecid(stock.code));
-  const eastmoneyBatches: string[][] = [];
+  const batches: string[][] = [];
 
-  for (let index = 0; index < secids.length; index += eastmoneyBatchSize) {
-    eastmoneyBatches.push(secids.slice(index, index + eastmoneyBatchSize));
+  for (let index = 0; index < secids.length; index += eastmoneyUlistBatchSize) {
+    batches.push(secids.slice(index, index + eastmoneyUlistBatchSize));
   }
 
-  try {
-    const eastmoneyResults = await Promise.all(
-      eastmoneyBatches.map((batch) => fetchEastmoneyQuoteBatch(batch))
+  const payloads = await mapWithConcurrency(batches, eastmoneyUlistConcurrency, async (batch) => {
+    try {
+      return await fetchEastmoneyUlistBatch(batch);
+    } catch {
+      return null;
+    }
+  });
+
+  const quotes: Record<string, RemoteQuoteValue> = {};
+  let updatedAt = "";
+  let successfulBatches = 0;
+
+  for (const payload of payloads) {
+    if (!payload) {
+      continue;
+    }
+
+    successfulBatches += 1;
+    const result = parseEastmoneyQuoteBatch(payload);
+    Object.assign(quotes, result.quotes);
+    if (result.updatedAt && (!updatedAt || result.updatedAt > updatedAt)) {
+      updatedAt = result.updatedAt;
+    }
+  }
+
+  if (successfulBatches < batches.length * 0.8 || Object.keys(quotes).length === 0) {
+    throw new Error(
+      `Eastmoney ulist quote snapshot incomplete: ${successfulBatches}/${batches.length}`
     );
-    const eastmoneyQuotes: Record<string, RemoteQuoteValue> = {};
-    let eastmoneyUpdatedAt = "";
-
-    for (const result of eastmoneyResults) {
-      Object.assign(eastmoneyQuotes, result.quotes);
-      if (result.updatedAt && (!eastmoneyUpdatedAt || result.updatedAt > eastmoneyUpdatedAt)) {
-        eastmoneyUpdatedAt = result.updatedAt;
-      }
-    }
-
-    if (Object.keys(eastmoneyQuotes).length < baselineStocks.length * 0.9) {
-      throw new Error("Eastmoney quote snapshot is incomplete");
-    }
-
-    return {
-      timestamp: Date.now(),
-      updatedAt: eastmoneyUpdatedAt || new Date().toISOString(),
-      quotes: eastmoneyQuotes,
-      source: "direct",
-    };
-  } catch {
-    // Sina remains a day-change fallback so the map can still render if Eastmoney is temporarily unavailable.
   }
 
+  return {
+    timestamp: Date.now(),
+    updatedAt: updatedAt || new Date().toISOString(),
+    quotes,
+    source: "direct",
+  };
+}
+
+async function fetchEastmoneyQuoteSnapshotFromRemote(): Promise<QuoteSnapshot> {
+  try {
+    return await fetchEastmoneyQuoteSnapshotFromClist();
+  } catch {
+    // Same period fields as clist; used when list pagination is unavailable.
+    return fetchEastmoneyQuoteSnapshotFromUlist();
+  }
+}
+
+async function fetchSinaQuoteSnapshotFromRemote(): Promise<QuoteSnapshot> {
   const symbols = baselineStocks.map((stock) => toSinaSymbol(stock.code));
   const batches: string[][] = [];
 
@@ -820,6 +1016,99 @@ async function fetchQuoteSnapshotFromRemote(): Promise<QuoteSnapshot> {
     quotes,
     source: "direct",
   };
+}
+
+function countBaselineQuoteCoverage(quotes: Record<string, RemoteQuoteValue>) {
+  return baselineStocks.reduce((count, stock) => (quotes[stock.code] ? count + 1 : count), 0);
+}
+
+function mergeQuoteSnapshots(
+  primary: QuoteSnapshot,
+  secondary: QuoteSnapshot | null
+): QuoteSnapshot {
+  if (!secondary) {
+    return primary;
+  }
+
+  const quotes: Record<string, RemoteQuoteValue> = { ...primary.quotes };
+
+  for (const [code, secondaryQuote] of Object.entries(secondary.quotes)) {
+    const primaryQuote = quotes[code];
+    if (!primaryQuote) {
+      quotes[code] = secondaryQuote;
+      continue;
+    }
+
+    quotes[code] = {
+      price: primaryQuote.price || secondaryQuote.price,
+      turnoverAmount: primaryQuote.turnoverAmount || secondaryQuote.turnoverAmount,
+      changes: {
+        day: primaryQuote.changes.day ?? secondaryQuote.changes.day,
+        week: primaryQuote.changes.week ?? secondaryQuote.changes.week,
+        month: primaryQuote.changes.month ?? secondaryQuote.changes.month,
+        year: primaryQuote.changes.year ?? secondaryQuote.changes.year,
+      },
+    };
+  }
+
+  return {
+    timestamp: Date.now(),
+    updatedAt:
+      primary.updatedAt && secondary.updatedAt
+        ? primary.updatedAt > secondary.updatedAt
+          ? primary.updatedAt
+          : secondary.updatedAt
+        : primary.updatedAt || secondary.updatedAt,
+    quotes,
+    source: "direct",
+  };
+}
+
+async function fetchQuoteSnapshotFromRemote(): Promise<QuoteSnapshot> {
+  const sinaPromise = fetchSinaQuoteSnapshotFromRemote()
+    .then((snapshot) => ({ snapshot, error: null as Error | null }))
+    .catch((error: unknown) => ({
+      snapshot: null as QuoteSnapshot | null,
+      error: error instanceof Error ? error : new Error("Sina quote snapshot failed"),
+    }));
+
+  // Eastmoney can be slow or flaky from some runtimes; bound the wait so Sina can still serve day data.
+  const eastmoneyPromise = Promise.race([
+    fetchEastmoneyQuoteSnapshotFromRemote()
+      .then((snapshot) => ({ snapshot, error: null as Error | null }))
+      .catch((error: unknown) => ({
+        snapshot: null as QuoteSnapshot | null,
+        error: error instanceof Error ? error : new Error("Eastmoney quote snapshot failed"),
+      })),
+    sleep(25_000).then(() => ({
+      snapshot: null as QuoteSnapshot | null,
+      error: new Error("Eastmoney quote snapshot timed out"),
+    })),
+  ]);
+
+  const [eastmoneyResult, sinaResult] = await Promise.all([eastmoneyPromise, sinaPromise]);
+  const eastmoneySnapshot = eastmoneyResult.snapshot;
+  const sinaSnapshot = sinaResult.snapshot;
+
+  // Prefer Eastmoney as the primary source because it carries week/month/year changes.
+  if (eastmoneySnapshot && countBaselineQuoteCoverage(eastmoneySnapshot.quotes) >= baselineStocks.length * 0.9) {
+    return mergeQuoteSnapshots(eastmoneySnapshot, sinaSnapshot);
+  }
+
+  if (sinaSnapshot && countBaselineQuoteCoverage(sinaSnapshot.quotes) >= baselineStocks.length * 0.9) {
+    // Merge any partial Eastmoney period fields onto the reliable Sina day snapshot.
+    return mergeQuoteSnapshots(sinaSnapshot, eastmoneySnapshot);
+  }
+
+  if (eastmoneySnapshot && countBaselineQuoteCoverage(eastmoneySnapshot.quotes) > 0) {
+    return mergeQuoteSnapshots(eastmoneySnapshot, sinaSnapshot);
+  }
+
+  if (sinaSnapshot) {
+    return sinaSnapshot;
+  }
+
+  throw eastmoneyResult.error ?? sinaResult.error ?? new Error("Quote snapshot is unavailable");
 }
 
 async function getMarketIndexSnapshot() {
