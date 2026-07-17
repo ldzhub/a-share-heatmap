@@ -45,7 +45,7 @@ import {
 
 type QuoteMap = Record<string, { price: number; changePct: number; turnoverAmount: number }>;
 
-const inspectorSortKeys = ["changeAbs", "changeDesc", "changeAsc", "turnover", "name"] as const;
+const inspectorSortKeys = ["changeDesc", "changeAsc", "changeAbs", "turnover", "name"] as const;
 type InspectorSortKey = (typeof inspectorSortKeys)[number];
 
 type InspectorStockItem = {
@@ -464,7 +464,7 @@ function parseStockCode(code: string) {
 function getSparklineUrl(code: string) {
   const { symbol, market } = parseStockCode(code);
   const marketId = market === "SH" ? "1" : "0";
-  // RJY 带横/竖虚线网格；RJY2 更大但往往只有横线。
+  // RJY 带横/竖虚线网格；线色已按 A 股涨红跌绿绘制。
   return `https://webquotepic.eastmoney.com/GetPic.aspx?nid=${marketId}.${symbol}&imageType=RJY`;
 }
 
@@ -480,24 +480,36 @@ function InspectorHeaderSparkline({
   className?: string;
 }) {
   const isFlat = Math.abs(changePct) < 0.1;
-  const isRise = changePct > 0;
-  const shouldUseRed = priceColorMode === "red-rise" ? isRise : !isRise;
-
-  // 保留原图黑底与虚线网格；仅轻微提亮，必要时把绿线偏到红色。
-  const filter = isFlat
-    ? "brightness(1.08) grayscale(0.45)"
-    : shouldUseRed
-      ? "brightness(1.1) hue-rotate(-120deg)"
-      : "brightness(1.08)";
+  // 原图已是涨红跌绿；仅在「绿涨红跌」模式下交换 R/G，灰网格几乎不变。
+  const shouldSwapRg = !isFlat && priceColorMode === "green-rise";
 
   return (
     <span className={cn("relative flex min-w-0 items-center justify-center", className)}>
+      {shouldSwapRg && (
+        <svg aria-hidden className="pointer-events-none absolute h-0 w-0 overflow-hidden">
+          <filter id="sparkline-rg-swap" colorInterpolationFilters="sRGB">
+            <feColorMatrix
+              type="matrix"
+              values="0 1 0 0 0
+                      1 0 0 0 0
+                      0 0 1 0 0
+                      0 0 0 1 0"
+            />
+          </filter>
+        </svg>
+      )}
       <img
         src={getSparklineUrl(code)}
         alt=""
         className="h-full w-auto max-w-full object-contain"
         style={{
-          filter,
+          // screen 消掉黑底，保留白/灰虚线与原有线色
+          mixBlendMode: "screen",
+          filter: isFlat
+            ? "brightness(1.15) grayscale(0.55)"
+            : shouldSwapRg
+              ? "url(#sparkline-rg-swap) brightness(1.12)"
+              : "brightness(1.12)",
           imageRendering: "pixelated",
         }}
         loading="lazy"
@@ -1381,11 +1393,11 @@ function MobileStockSheet({
 
         {stock && (
           <>
-            <div className="mx-4 mb-3 overflow-hidden rounded-md border border-slate-700/80 bg-white">
+            <div className="mx-4 mb-3 flex justify-center overflow-hidden rounded-md border border-slate-700/80 bg-white px-2 py-1">
               <img
                 src={getDailyKlineUrl(stock.code)}
                 alt={`${stock.name} K-line`}
-                className="h-auto w-full object-contain"
+                className="h-auto w-[88%] object-contain"
                 loading="lazy"
                 decoding="async"
                 referrerPolicy="no-referrer"
@@ -1421,8 +1433,8 @@ function MobileStockSheet({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
               {stock && (
-                <div className="sticky top-0 z-10 flex w-full items-center gap-3 border-b border-l-[3px] border-b-slate-800/80 border-l-slate-200 bg-[#151a21] px-4 py-2.5 pl-[13px] text-left text-[13px] shadow-[0_8px_16px_rgba(0,0,0,0.28)]">
-                  <span className="min-w-0 flex-1 truncate font-medium text-white">{stock.name}</span>
+                <div className="sticky top-0 z-10 flex w-full items-center gap-3 border-b border-b-slate-800/80 bg-[#1a212b] px-4 py-2.5 text-left text-[13px] shadow-[0_8px_16px_rgba(0,0,0,0.28)]">
+                  <span className="min-w-0 flex-1 truncate font-semibold text-white">{stock.name}</span>
                   <img
                     src={getSparklineUrl(stock.code)}
                     alt=""
@@ -1451,7 +1463,7 @@ function MobileStockSheet({
                     type="button"
                     key={item.code}
                     onClick={() => onSelectStock(item.code)}
-                    className="flex w-full items-center gap-3 border-b border-l-[3px] border-b-slate-800/80 border-l-transparent px-4 py-2.5 pl-[13px] text-left text-[13px] text-slate-200 transition-colors hover:bg-slate-800/40"
+                    className="flex w-full items-center gap-3 border-b border-b-slate-800/80 px-4 py-2.5 text-left text-[13px] text-slate-200 transition-colors hover:bg-slate-800/40"
                   >
                     <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
                     <img
@@ -1910,7 +1922,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [hoveredSubBoardName, setHoveredSubBoardName] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedStockCode, setSelectedStockCode] = useState<string | null>(null);
-  const [inspectorSortKey, setInspectorSortKey] = useState<InspectorSortKey>("changeAbs");
+  const [inspectorSortKey, setInspectorSortKey] = useState<InspectorSortKey>("changeDesc");
   const [selectedBoardName, setSelectedBoardName] = useState<string | null>(null);
   const [selectedSubBoardName, setSelectedSubBoardName] = useState<string | null>(null);
   const isEnglish = locale === "en";
@@ -1940,7 +1952,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     active: false,
     pointerX: 0,
     pointerY: 0,
+    startX: 0,
+    startY: 0,
+    moved: false,
   });
+  const boardClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStateRef = useRef<{
     mode: "idle" | "pan" | "pinch" | "tap";
     startClientX: number;
@@ -2236,6 +2252,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
     return () => {
       window.removeEventListener("mouseup", stopPan);
+      if (boardClickTimerRef.current) {
+        clearTimeout(boardClickTimerRef.current);
+        boardClickTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -2999,31 +3019,51 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
     for (const board of layout.boardRects) {
       const isActiveBoard = activeBoardName === board.name;
+      const isTitleHovered = hoveredBoardTitleName === board.name;
+      const showDrillHint = boardFilter === allBoardsValue && board.width > 72 && board.titleHeight > 10;
+
       if (board.titleHeight > 0) {
         context.fillStyle = getBoardHeaderColor(board.changePct, priceColorMode);
         context.fillRect(board.x, board.y, board.width, board.titleHeight);
+
+        if (isActiveBoard || isTitleHovered) {
+          context.fillStyle = isTitleHovered ? "rgba(255, 255, 255, 0.22)" : "rgba(255, 255, 255, 0.12)";
+          context.fillRect(board.x, board.y, board.width, board.titleHeight);
+        }
       }
 
-      context.strokeStyle = isActiveBoard ? "#f6d36d" : heatmapCanvasTheme.boardBorder;
-      context.lineWidth = isActiveBoard ? 1.8 : 1;
+      context.strokeStyle = isActiveBoard || isTitleHovered ? "#f6d36d" : heatmapCanvasTheme.boardBorder;
+      context.lineWidth = isActiveBoard || isTitleHovered ? 1.8 : 1;
       context.strokeRect(board.x + 0.5, board.y + 0.5, Math.max(0, board.width - 1), Math.max(0, board.height - 1));
 
       if (board.width > 56 && board.titleHeight > 10) {
+        const isBreadcrumb = boardFilter === board.name;
         const fontSize = clamp(Math.floor(board.titleHeight * 0.52), 10, 15);
+        const titleText = isBreadcrumb
+          ? `‹ ${messages.boardBreadcrumbAll} - ${board.name}`
+          : shortenText(board.name, board.width > 180 ? 12 : 8);
         context.fillStyle = "rgba(247, 250, 252, 0.96)";
         context.textAlign = "left";
         context.textBaseline = "middle";
         context.font = `700 ${fontSize}px Arial, sans-serif`;
         drawClippedText(
           context,
-          shortenText(board.name, board.width > 180 ? 12 : 8),
+          titleText,
           board.x + 8,
           board.y + board.titleHeight / 2 + fontSize * 0.08,
           board.x + 4,
           board.y + 2,
-          Math.max(0, board.width - 8),
+          Math.max(0, board.width - (showDrillHint ? 22 : 8)),
           Math.max(0, board.titleHeight - 4)
         );
+
+        if (showDrillHint) {
+          context.fillStyle = isTitleHovered || isActiveBoard ? "rgba(255, 255, 255, 0.95)" : "rgba(247, 250, 252, 0.72)";
+          context.font = `700 ${Math.max(10, fontSize)}px Arial, sans-serif`;
+          context.textAlign = "right";
+          context.textBaseline = "middle";
+          context.fillText("›", board.x + board.width - 8, board.y + board.titleHeight / 2 + 0.5);
+        }
       }
     }
 
@@ -3053,11 +3093,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     canvasSize.width,
     activeBoardName,
     activeSubBoardName,
+    boardFilter,
     highlightedStock,
     heatmapCanvasTheme,
+    hoveredBoardTitleName,
     layout.boardRects,
     layout.subBoardRects,
     layout.stockRects,
+    messages.boardBreadcrumbAll,
     priceColorMode,
     view.scale,
     view.x,
@@ -3175,6 +3218,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         dragStateRef.current.pointerX = event.clientX;
         dragStateRef.current.pointerY = event.clientY;
 
+        if (
+          Math.hypot(event.clientX - dragStateRef.current.startX, event.clientY - dragStateRef.current.startY) > 4
+        ) {
+          dragStateRef.current.moved = true;
+        }
+
         setView((current) => {
           const nextOffset = clampOffset(
             canvasSize.width,
@@ -3195,6 +3244,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           };
         });
         return;
+      }
+
+      if (
+        Math.hypot(event.clientX - dragStateRef.current.startX, event.clientY - dragStateRef.current.startY) > 4
+      ) {
+        dragStateRef.current.moved = true;
       }
 
       const world = toWorldPoint(pointerX, pointerY);
@@ -3219,6 +3274,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
   const onMouseDown = useCallback(
     (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      dragStateRef.current.startX = event.clientX;
+      dragStateRef.current.startY = event.clientY;
+      dragStateRef.current.moved = false;
+
       if (isMobile || view.scale <= 1) {
         return;
       }
@@ -3285,6 +3344,17 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     [canvasSize.height, canvasSize.width]
   );
 
+  const toggleBoardFilter = useCallback((boardName: string) => {
+    setBoardFilter((current) => (current === boardName ? allBoardsValue : boardName));
+  }, []);
+
+  const clearBoardClickTimer = useCallback(() => {
+    if (boardClickTimerRef.current) {
+      clearTimeout(boardClickTimerRef.current);
+      boardClickTimerRef.current = null;
+    }
+  }, []);
+
   const handleCanvasTap = useCallback(
     (clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
@@ -3294,6 +3364,19 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       const bounds = canvas.getBoundingClientRect();
       const world = toWorldPoint(clientX - bounds.left, clientY - bounds.top);
+
+      const boardTitle = pickBoardTitle(world.x, world.y);
+      if (boardTitle) {
+        toggleBoardFilter(boardTitle.name);
+        return;
+      }
+
+      const subBoardTitle = pickSubBoardTitle(world.x, world.y);
+      if (subBoardTitle) {
+        toggleBoardFilter(subBoardTitle.boardName);
+        return;
+      }
+
       const stock = pickStock(world.x, world.y);
 
       if (stock) {
@@ -3323,7 +3406,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       setSelectedBoardName(null);
       setSelectedSubBoardName(null);
     },
-    [pickBoard, pickStock, pickSubBoard, toWorldPoint]
+    [pickBoard, pickBoardTitle, pickStock, pickSubBoard, pickSubBoardTitle, toWorldPoint, toggleBoardFilter]
   );
 
   const handleCanvasDoubleTap = useCallback(
@@ -3338,17 +3421,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       const boardTitle = pickBoardTitle(world.x, world.y);
       if (boardTitle) {
-        setBoardFilter((current) =>
-          current === boardTitle.name ? allBoardsValue : boardTitle.name
-        );
+        toggleBoardFilter(boardTitle.name);
         return true;
       }
 
       const subBoardTitle = pickSubBoardTitle(world.x, world.y);
       if (subBoardTitle) {
-        setBoardFilter((current) =>
-          current === subBoardTitle.boardName ? allBoardsValue : subBoardTitle.boardName
-        );
+        toggleBoardFilter(subBoardTitle.boardName);
         return true;
       }
 
@@ -3356,15 +3435,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       // board so users can double-tap anywhere inside a 一级板块 to toggle.
       const board = pickBoard(world.x, world.y);
       if (board) {
-        setBoardFilter((current) =>
-          current === board.name ? allBoardsValue : board.name
-        );
+        toggleBoardFilter(board.name);
         return true;
       }
 
       return false;
     },
-    [pickBoard, pickBoardTitle, pickSubBoardTitle, toWorldPoint]
+    [pickBoard, pickBoardTitle, pickSubBoardTitle, toWorldPoint, toggleBoardFilter]
   );
 
   const openXueqiuForStock = useCallback((code: string) => {
@@ -3580,6 +3657,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         return;
       }
 
+      clearBoardClickTimer();
+
       const canvas = canvasRef.current;
       if (!canvas) {
         return;
@@ -3590,13 +3669,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       const boardTitle = pickBoardTitle(world.x, world.y);
       if (boardTitle) {
-        setBoardFilter((current) => (current === boardTitle.name ? allBoardsValue : boardTitle.name));
+        toggleBoardFilter(boardTitle.name);
         return;
       }
 
       const subBoardTitle = pickSubBoardTitle(world.x, world.y);
       if (subBoardTitle) {
-        setBoardFilter((current) => (current === subBoardTitle.boardName ? allBoardsValue : subBoardTitle.boardName));
+        toggleBoardFilter(subBoardTitle.boardName);
         return;
       }
 
@@ -3607,7 +3686,43 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       window.open(`https://xueqiu.com/S/${toXueqiuSymbol(stock.code)}`, "_blank", "noopener,noreferrer");
     },
-    [isMobile, pickBoardTitle, pickStock, pickSubBoardTitle, toWorldPoint]
+    [clearBoardClickTimer, isMobile, pickBoardTitle, pickStock, pickSubBoardTitle, toWorldPoint, toggleBoardFilter]
+  );
+
+  const onCanvasClick = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      if (isMobile || dragStateRef.current.moved) {
+        return;
+      }
+
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return;
+      }
+
+      const bounds = canvas.getBoundingClientRect();
+      const world = toWorldPoint(event.clientX - bounds.left, event.clientY - bounds.top);
+
+      const boardTitle = pickBoardTitle(world.x, world.y);
+      const subBoardTitle = boardTitle ? null : pickSubBoardTitle(world.x, world.y);
+      if (!boardTitle && !subBoardTitle) {
+        return;
+      }
+
+      clearBoardClickTimer();
+      boardClickTimerRef.current = setTimeout(() => {
+        boardClickTimerRef.current = null;
+        if (boardTitle) {
+          toggleBoardFilter(boardTitle.name);
+          return;
+        }
+
+        if (subBoardTitle) {
+          toggleBoardFilter(subBoardTitle.boardName);
+        }
+      }, 220);
+    },
+    [clearBoardClickTimer, isMobile, pickBoardTitle, pickSubBoardTitle, toWorldPoint, toggleBoardFilter]
   );
 
   const toggleFullscreen = useCallback(() => {
@@ -4402,6 +4517,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               onMouseUp={onMouseUp}
               onMouseLeave={onMouseLeave}
               onWheel={onWheel}
+              onClick={onCanvasClick}
               onDoubleClick={onDoubleClick}
             />
 
@@ -4419,66 +4535,47 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 {activeInspectorStock && (
                   <>
                     <div
-                      className="border-b border-black/15 px-3 py-2.5"
+                      className="flex items-center gap-2 border-b border-black/15 px-3 py-1.5"
                       style={{
                         backgroundColor: getBoardHeaderColor(
                           activeInspectorStock.changePct,
                           priceColorMode
                         ),
                       }}
+                      title={activeInspectorTitle ?? undefined}
                     >
-                      <p className="text-[11px] font-medium tracking-[0.04em] text-white/70">
-                        {activeInspectorTitle}
-                      </p>
-                      <p className="mt-1 text-[17px] font-semibold leading-none text-white [word-break:keep-all]">
+                      <p className="min-w-0 shrink truncate text-[14px] font-semibold leading-none text-white [word-break:keep-all]">
                         {activeInspectorStock.name}
                       </p>
-                      <div className="mt-2 flex justify-center">
-                        <InspectorHeaderSparkline
-                          code={activeInspectorStock.code}
-                          changePct={activeInspectorStock.changePct}
-                          priceColorMode={priceColorMode}
-                          className="h-9 w-[168px]"
-                        />
-                      </div>
-                      <div className="mt-2.5 grid grid-cols-3 gap-2">
-                        <div className="min-w-0">
-                          <p className="text-[16px] font-semibold leading-none tabular-nums text-white">
-                            {formatPrice(activeInspectorStock.price)}
-                          </p>
-                          <p className="mt-1 text-[10px] font-medium tracking-[0.04em] text-white/55">
-                            {messages.priceLabel}
-                          </p>
-                        </div>
-                        <div className="min-w-0 text-center">
-                          <p className="text-[16px] font-semibold leading-none tabular-nums text-white">
-                            {formatTurnoverAmount(activeInspectorStock.marketCap, locale)}
-                          </p>
-                          <p className="mt-1 text-[10px] font-medium tracking-[0.04em] text-white/55">
-                            {messages.marketCapLabel}
-                          </p>
-                        </div>
-                        <div className="min-w-0 text-right">
-                          <p
-                            className={cn(
-                              "text-[16px] font-semibold leading-none tabular-nums",
-                              getChangeTextClass(activeInspectorStock.changePct, priceColorMode, "soft")
-                            )}
-                          >
-                            {formatChange(activeInspectorStock.changePct)}
-                          </p>
-                          <p className="mt-1 text-[10px] font-medium tracking-[0.04em] text-white/55">
-                            {messages.changeLabel}
-                          </p>
-                        </div>
+                      <InspectorHeaderSparkline
+                        code={activeInspectorStock.code}
+                        changePct={activeInspectorStock.changePct}
+                        priceColorMode={priceColorMode}
+                        className="h-8 w-[108px] shrink-0"
+                      />
+                      <div className="ml-auto flex min-w-0 shrink-0 items-baseline gap-2.5 tabular-nums">
+                        <span className="text-[13px] font-semibold leading-none text-white">
+                          {formatPrice(activeInspectorStock.price)}
+                        </span>
+                        <span className="text-[12px] font-medium leading-none text-white/75">
+                          {formatTurnoverAmount(activeInspectorStock.marketCap, locale)}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[13px] font-semibold leading-none",
+                            getChangeTextClass(activeInspectorStock.changePct, priceColorMode, "soft")
+                          )}
+                        >
+                          {formatChange(activeInspectorStock.changePct)}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="border-b border-slate-700/80 bg-white p-1.5">
+                    <div className="flex justify-center border-b border-slate-700/80 bg-white px-2 py-1">
                       <img
                         src={getDailyKlineUrl(activeInspectorStock.code)}
                         alt={`${activeInspectorStock.name} K-line`}
-                        className="h-auto w-full bg-white object-contain"
+                        className="h-auto w-[88%] bg-white object-contain"
                         loading="lazy"
                         decoding="async"
                         referrerPolicy="no-referrer"
@@ -4507,7 +4604,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       <div
                         ref={inspectorListRef}
                         className="overflow-y-auto"
-                        style={{ maxHeight: Math.max(140, inspectorStyle.maxHeight - 400) }}
+                        style={{ maxHeight: Math.max(140, inspectorStyle.maxHeight - 320) }}
                       >
                         {inspectorStocks.map((stock) => {
                           const isActive = stock.active;
@@ -4516,10 +4613,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                             <div
                               key={stock.code}
                               className={cn(
-                                "grid grid-cols-[minmax(0,1fr)_56px_64px_80px] items-center gap-2 border-b border-b-slate-300/70 border-l-[3px] px-3 py-1.5 pl-[9px] text-[12.5px]",
+                                "grid grid-cols-[minmax(0,1fr)_56px_64px_80px] items-center gap-2 border-b border-b-slate-300/70 px-3 py-1.5 text-[12.5px]",
                                 isActive
-                                  ? "sticky top-0 z-10 border-l-slate-800 bg-white shadow-[0_1px_0_rgba(15,23,42,0.08)]"
-                                  : "border-l-transparent bg-[#f4f6f7]"
+                                  ? "sticky top-0 z-10 bg-white font-semibold shadow-[0_1px_0_rgba(15,23,42,0.08)]"
+                                  : "bg-[#f4f6f7]"
                               )}
                             >
                               <span
