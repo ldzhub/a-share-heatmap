@@ -2085,6 +2085,7 @@ function SettingsDrawer({
   onShortcutBindingsChange: (bindings: ShortcutBindings) => void;
   onShortcutRecordingChange: (recording: boolean) => void;
 }) {
+  const isMobile = useIsMobile();
   const [recordingAction, setRecordingAction] = useState<ShortcutActionId | null>(null);
 
   useEffect(() => {
@@ -2092,6 +2093,12 @@ function SettingsDrawer({
       setRecordingAction(null);
     }
   }, [open, tab]);
+
+  useEffect(() => {
+    if (isMobile && (tab === "shortcuts" || tab === "help")) {
+      onTabChange("appearance");
+    }
+  }, [isMobile, onTabChange, tab]);
 
   useEffect(() => {
     onShortcutRecordingChange(Boolean(recordingAction));
@@ -2165,8 +2172,12 @@ function SettingsDrawer({
   ];
   const tabs: Array<{ key: SettingsTab; label: string; icon: typeof Palette }> = [
     { key: "appearance", label: messages.settingsAppearance, icon: Palette },
-    { key: "shortcuts", label: messages.settingsShortcuts, icon: Keyboard },
-    { key: "help", label: messages.settingsHelp, icon: Info },
+    ...(!isMobile
+      ? [
+          { key: "shortcuts" as const, label: messages.settingsShortcuts, icon: Keyboard },
+          { key: "help" as const, label: messages.settingsHelp, icon: Info },
+        ]
+      : []),
     { key: "project", label: messages.settingsProject, icon: ExternalLink },
   ];
   const themeLabels: Record<ThemeColorKey, string> = isEnglish
@@ -2220,18 +2231,18 @@ function SettingsDrawer({
             })}
           </nav>
 
-          <div className="min-h-0 overflow-y-auto p-4">
+          <div className="min-h-0 overflow-y-auto p-3 md:p-4">
             {tab === "appearance" && (
-              <div className="space-y-6">
+              <div className="space-y-4 md:space-y-6">
                 <section>
                   <h3 className="text-sm font-semibold">{messages.languageLabel}</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => onLocaleChange("zh")}
                       aria-pressed={locale === "zh"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         locale === "zh"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -2244,7 +2255,7 @@ function SettingsDrawer({
                       onClick={() => onLocaleChange("en")}
                       aria-pressed={locale === "en"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         locale === "en"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -2257,13 +2268,13 @@ function SettingsDrawer({
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.displayMode}</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => onDisplayModeChange("light")}
                       aria-pressed={displayMode === "light"}
                       className={cn(
-                        "flex items-center gap-2 border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "flex items-center gap-2 border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         displayMode === "light"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -2277,7 +2288,7 @@ function SettingsDrawer({
                       onClick={() => onDisplayModeChange("dark")}
                       aria-pressed={displayMode === "dark"}
                       className={cn(
-                        "flex items-center gap-2 border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "flex items-center gap-2 border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         displayMode === "dark"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -2291,7 +2302,7 @@ function SettingsDrawer({
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.themeColor}</h3>
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {(Object.keys(themeColors) as ThemeColorKey[]).map((key) => (
                       <button
                         key={key}
@@ -2317,13 +2328,13 @@ function SettingsDrawer({
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.priceColor}</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => onPriceColorModeChange("red-rise")}
                       aria-pressed={priceColorMode === "red-rise"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm transition-colors",
+                        "border px-3 py-2 text-left text-sm transition-colors md:py-3",
                         priceColorMode === "red-rise"
                           ? "border-brand/70 bg-brand/15"
                           : "border-border bg-background/70 hover:bg-muted"
@@ -2337,7 +2348,7 @@ function SettingsDrawer({
                       onClick={() => onPriceColorModeChange("green-rise")}
                       aria-pressed={priceColorMode === "green-rise"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm transition-colors",
+                        "border px-3 py-2 text-left text-sm transition-colors md:py-3",
                         priceColorMode === "green-rise"
                           ? "border-brand/70 bg-brand/15"
                           : "border-border bg-background/70 hover:bg-muted"
@@ -5323,18 +5334,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </button>
             )}
 
-            {!isFullscreen && !sidebarOpen && (
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(true)}
-                aria-label={messages.expandSidebar}
-                title={withShortcutTitle(messages.expandSidebar, shortcutBindings.sidebar)}
-                className="absolute bottom-3 left-3 z-30 inline-flex size-11 items-center justify-center rounded-full border border-slate-500/70 bg-black/50 text-white shadow-[0_10px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:bg-black/70 md:hidden"
-              >
-                <Menu className="size-5" />
-              </button>
-            )}
-
             <canvas
               ref={canvasRef}
               role="img"
@@ -5524,38 +5523,70 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               isLightMode ? "bg-white/88 backdrop-blur-sm" : "bg-[#151a21]"
             )}
           >
-            <div className="flex items-center gap-2 sm:gap-3">
-              <a
-                href={githubProjectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={messages.githubProject}
-                title={messages.githubProject}
-                className={cn(
-                  "inline-flex min-w-0 shrink-0 items-center gap-1.5 text-[11px] font-normal tracking-tight transition-colors sm:text-[12px]",
-                  isLightMode
-                    ? "text-muted-foreground/60 hover:text-muted-foreground"
-                    : "text-slate-500/75 hover:text-slate-400"
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+                {!sidebarOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label={messages.expandSidebar}
+                    title={withShortcutTitle(messages.expandSidebar, shortcutBindings.sidebar)}
+                    className={cn(
+                      "inline-flex size-7 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                      isLightMode
+                        ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                        : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                    )}
+                  >
+                    <Menu className="size-3.5" />
+                  </button>
                 )}
-              >
-                <GitHubMark className="size-3.5 shrink-0 opacity-80" />
-                <span className="min-w-0 truncate">map.wenyuanw.me</span>
-              </a>
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode((current) => (current === "dark" ? "light" : "dark"))}
+                  aria-label={isLightMode ? messages.darkMode : messages.lightMode}
+                  title={isLightMode ? messages.darkMode : messages.lightMode}
+                  className={cn(
+                    "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                    isLightMode
+                      ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                      : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                  )}
+                >
+                  {isLightMode ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
+                </button>
+                <a
+                  href={githubProjectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={messages.githubProject}
+                  title={messages.githubProject}
+                  className={cn(
+                    "hidden min-w-0 shrink-0 items-center gap-1.5 text-[11px] font-normal tracking-tight transition-colors sm:text-[12px] md:inline-flex",
+                    isLightMode
+                      ? "text-muted-foreground/60 hover:text-muted-foreground"
+                      : "text-slate-500/75 hover:text-slate-400"
+                  )}
+                >
+                  <GitHubMark className="size-3.5 shrink-0 opacity-80" />
+                  <span className="min-w-0 truncate">map.wenyuanw.me</span>
+                </a>
+              </div>
 
-              <div className="flex min-w-0 flex-1 justify-center px-1 sm:px-2">
-                <div className="flex w-full max-w-[11rem] items-center gap-1.5 sm:max-w-52 md:max-w-56">
+              <div className="flex min-w-0 flex-1 justify-center overflow-hidden px-0.5 sm:px-2">
+                <div className="flex w-full min-w-0 max-w-52 items-center gap-1 sm:gap-1.5 md:max-w-56">
                   <TrendingDown
-                    className="size-3 shrink-0"
+                    className="size-2.5 shrink-0 sm:size-3"
                     style={{ color: fallTextColor }}
                     aria-label={messages.legendFall}
                   />
-                  <div className="relative min-w-0 flex-1">
+                  <div className="relative min-w-0 flex-1 overflow-hidden">
                     <div
-                      className="h-3.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
+                      className="h-2.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] sm:h-3.5"
                       style={{ background: legendGradient }}
                     />
                     <div
-                      className="pointer-events-none absolute inset-0 flex items-center justify-between px-1 text-[8px] font-semibold tabular-nums leading-none text-white md:text-[9px]"
+                      className="pointer-events-none absolute inset-0 flex items-center justify-between px-0.5 text-[7px] font-semibold tabular-nums leading-none text-white sm:px-1 sm:text-[8px] md:text-[9px]"
                       style={{ textShadow: "0 1px 2px rgba(0, 0, 0, 0.55)" }}
                     >
                       {legendTicks.map((tick) => (
@@ -5564,7 +5595,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     </div>
                   </div>
                   <TrendingUp
-                    className="size-3 shrink-0"
+                    className="size-2.5 shrink-0 sm:size-3"
                     style={{ color: riseTextColor }}
                     aria-label={messages.legendRise}
                   />
@@ -5572,7 +5603,23 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </div>
 
               <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
-                <div className="group relative shrink-0">
+                <a
+                  href={githubProjectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={messages.githubProject}
+                  title={messages.githubProject}
+                  className={cn(
+                    "inline-flex size-7 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                    isLightMode
+                      ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                      : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                  )}
+                >
+                  <GitHubMark className="size-3.5 opacity-80" />
+                </a>
+
+                <div className="group relative hidden shrink-0 md:block">
                   <button
                     type="button"
                     aria-label={messages.operationTipsTitle}
@@ -5615,18 +5662,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   type="button"
                   onClick={() => setDisplayMode((current) => (current === "dark" ? "light" : "dark"))}
                   aria-label={isLightMode ? messages.darkMode : messages.lightMode}
-                  title={
-                    isMobile
-                      ? isLightMode
-                        ? messages.darkMode
-                        : messages.lightMode
-                      : withShortcutTitle(
-                          isLightMode ? messages.darkMode : messages.lightMode,
-                          shortcutBindings.displayMode
-                        )
-                  }
+                  title={withShortcutTitle(
+                    isLightMode ? messages.darkMode : messages.lightMode,
+                    shortcutBindings.displayMode
+                  )}
                   className={cn(
-                    "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand",
+                    "hidden size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:inline-flex",
                     isLightMode
                       ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
                       : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
