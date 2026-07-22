@@ -37,6 +37,30 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getMessages, type HeatmapMessages, type Locale } from "@/lib/i18n";
 import {
+  boardHeaderColorFromTheme,
+  buildHeatThemeExport,
+  builtinHeatThemes,
+  cloneHeatTheme,
+  createCustomHeatTheme,
+  customHeatThemesStorageKey,
+  defaultHeatThemeId,
+  heatStopFields,
+  heatThemeStorageKey,
+  legendGradientFromTheme,
+  parseHeatThemeExport,
+  parseStoredCustomHeatThemes,
+  previewGradientFromStops,
+  resolveHeatTheme,
+  rgbToHex,
+  serializeCustomHeatThemes,
+  parseHexColor,
+  heatColorFromTheme,
+  uiChangeTextColor,
+  uiPolarityColor,
+  type HeatStopField,
+  type HeatTheme,
+} from "@/lib/heatmap-themes";
+import {
   defaultShortcutBindings,
   formatShortcutKey,
   formatShortcutLabel,
@@ -191,10 +215,13 @@ const heatmapCanvasThemes: Record<
     boardFill: string;
     subBoardFill: string;
     subBoardBorder: string;
+    activeSubBoardStroke: string;
     activeSubBoardInner: string;
     boardBorder: string;
+    activeBoardStroke: string;
     highlightOuter: string;
     highlightInner: string;
+    chrome: string;
   }
 > = {
   dark: {
@@ -203,21 +230,27 @@ const heatmapCanvasThemes: Record<
     boardFill: "#20252d",
     subBoardFill: "rgba(18, 23, 31, 0.62)",
     subBoardBorder: "rgba(148, 163, 184, 0.3)",
+    activeSubBoardStroke: "#5eead4",
     activeSubBoardInner: "rgba(8, 47, 73, 0.92)",
     boardBorder: "rgba(148, 163, 184, 0.48)",
+    activeBoardStroke: "#f6d36d",
     highlightOuter: "rgba(2, 6, 23, 0.92)",
     highlightInner: "#f8fafc",
+    chrome: "#10141b",
   },
   light: {
-    backgroundStart: "#f8fafc",
-    backgroundEnd: "#e9eef5",
-    boardFill: "#eef2f7",
-    subBoardFill: "rgba(255, 255, 255, 0.72)",
-    subBoardBorder: "rgba(100, 116, 139, 0.32)",
-    activeSubBoardInner: "rgba(14, 116, 144, 0.42)",
-    boardBorder: "rgba(100, 116, 139, 0.42)",
-    highlightOuter: "rgba(15, 23, 42, 0.82)",
+    backgroundStart: "#f6f8fb",
+    backgroundEnd: "#e8eef6",
+    boardFill: "#d8e0eb",
+    subBoardFill: "rgba(255, 255, 255, 0.82)",
+    subBoardBorder: "rgba(100, 116, 139, 0.26)",
+    activeSubBoardStroke: "#0f766e",
+    activeSubBoardInner: "rgba(15, 118, 110, 0.28)",
+    boardBorder: "rgba(71, 85, 105, 0.34)",
+    activeBoardStroke: "#b45309",
+    highlightOuter: "rgba(15, 23, 42, 0.42)",
     highlightInner: "#ffffff",
+    chrome: "#e8eef6",
   },
 };
 
@@ -718,86 +751,44 @@ function getCompactPeriodLabel(period: HeatmapPeriodKey, locale: Locale) {
   return "年";
 }
 
-function getHeatColor(changePct: number, colorMode: PriceColorMode) {
-  const limit = 10;
-  const neutral = "rgb(72, 79, 92)";
-  const amplitude = clamp(Math.abs(changePct) / limit, 0, 1);
-
-  if (Math.abs(changePct) < 0.1) {
-    return neutral;
-  }
-
-  const isRise = changePct > 0;
-  const shouldUseRed = colorMode === "red-rise" ? isRise : !isRise;
-
-  if (shouldUseRed) {
-    const red = Math.round(140 + amplitude * 115);
-    const green = Math.round(72 - amplitude * 42);
-    const blue = Math.round(76 - amplitude * 38);
-    return `rgb(${red}, ${green}, ${blue})`;
-  }
-
-  const red = Math.round(40 - amplitude * 14);
-  const green = Math.round(126 + amplitude * 88);
-  const blue = Math.round(76 - amplitude * 10);
-  return `rgb(${red}, ${green}, ${blue})`;
+function getHeatColor(
+  theme: HeatTheme,
+  changePct: number,
+  colorMode: PriceColorMode,
+  displayMode: DisplayMode = "dark"
+) {
+  return heatColorFromTheme(theme, changePct, colorMode === "red-rise", displayMode);
 }
 
-function getLegendGradient(colorMode: PriceColorMode) {
-  return `linear-gradient(to right, ${colorLegendSteps
-    .map((step, index) => {
-      const position = (index / (colorLegendSteps.length - 1)) * 100;
-      return `${getHeatColor(step, colorMode)} ${position.toFixed(2)}%`;
-    })
-    .join(", ")})`;
+function getLegendGradient(theme: HeatTheme, colorMode: PriceColorMode, displayMode: DisplayMode = "dark") {
+  return legendGradientFromTheme(theme, colorMode === "red-rise", displayMode, colorLegendSteps);
 }
 
-function getBoardHeaderColor(changePct: number, colorMode: PriceColorMode) {
-  const amplitude = clamp(Math.abs(changePct) / 10, 0, 1);
-
-  if (Math.abs(changePct) < 0.1) {
-    return "rgb(51, 58, 70)";
-  }
-
-  const isRise = changePct > 0;
-  const shouldUseRed = colorMode === "red-rise" ? isRise : !isRise;
-
-  if (shouldUseRed) {
-    return `rgb(${Math.round(120 + amplitude * 60)}, ${Math.round(58 - amplitude * 12)}, ${Math.round(
-      66 - amplitude * 10
-    )})`;
-  }
-
-  return `rgb(${Math.round(46 - amplitude * 10)}, ${Math.round(102 + amplitude * 36)}, ${Math.round(
-    70 - amplitude * 6
-  )})`;
+function getBoardHeaderColor(
+  theme: HeatTheme,
+  changePct: number,
+  colorMode: PriceColorMode,
+  displayMode: DisplayMode = "dark"
+) {
+  return boardHeaderColorFromTheme(theme, changePct, colorMode === "red-rise", displayMode);
 }
 
-function getChangeTextClass(changePct: number, colorMode: PriceColorMode, tone: "normal" | "soft" | "strong" = "normal") {
-  if (Math.abs(changePct) < 0.1) {
-    return tone === "strong" ? "text-slate-500" : "text-muted-foreground";
-  }
-
-  const isRise = changePct > 0;
-  const shouldUseRed = colorMode === "red-rise" ? isRise : !isRise;
-
-  if (shouldUseRed) {
-    if (tone === "soft") return "text-red-100";
-    if (tone === "strong") return "text-red-500";
-    return "text-red-400";
-  }
-
-  if (tone === "soft") return "text-emerald-100";
-  if (tone === "strong") return "text-emerald-600";
-  return "text-emerald-400";
+function getChangeTextColor(
+  theme: HeatTheme,
+  changePct: number,
+  colorMode: PriceColorMode,
+  displayMode: DisplayMode,
+  tone: "normal" | "soft" | "strong" = "normal"
+) {
+  return uiChangeTextColor(theme, changePct, colorMode === "red-rise", displayMode, tone);
 }
 
-function getRiseTextClass(colorMode: PriceColorMode) {
-  return colorMode === "red-rise" ? "text-red-400" : "text-emerald-400";
+function getRiseTextColor(theme: HeatTheme, colorMode: PriceColorMode, displayMode: DisplayMode) {
+  return uiPolarityColor(theme, "rise", colorMode === "red-rise", displayMode, "normal");
 }
 
-function getFallTextClass(colorMode: PriceColorMode) {
-  return colorMode === "red-rise" ? "text-emerald-400" : "text-red-400";
+function getFallTextColor(theme: HeatTheme, colorMode: PriceColorMode, displayMode: DisplayMode) {
+  return uiPolarityColor(theme, "fall", colorMode === "red-rise", displayMode, "normal");
 }
 
 function weightedAverageChange(
@@ -1354,6 +1345,8 @@ function MobileStockSheet({
   stocks,
   messages,
   priceColorMode,
+  heatTheme,
+  displayMode,
   sortKey,
   onSortChange,
   onClose,
@@ -1365,6 +1358,8 @@ function MobileStockSheet({
   stocks: MobileStockSheetStock[];
   messages: HeatmapMessages;
   priceColorMode: PriceColorMode;
+  heatTheme: HeatTheme;
+  displayMode: DisplayMode;
   sortKey: InspectorSortKey;
   onSortChange: (next: InspectorSortKey) => void;
   onClose: () => void;
@@ -1395,10 +1390,10 @@ function MobileStockSheet({
                 <div className="mt-1 flex items-baseline gap-3 tabular-nums">
                   <span className="text-[20px] font-semibold text-white">{formatPrice(stock.price)}</span>
                   <span
-                    className={cn(
-                      "text-[15px] font-semibold",
-                      getChangeTextClass(stock.changePct, priceColorMode)
-                    )}
+                    className="text-[15px] font-semibold"
+                    style={{
+                      color: getChangeTextColor(heatTheme, stock.changePct, priceColorMode, displayMode),
+                    }}
                   >
                     {formatChange(stock.changePct)}
                   </span>
@@ -1474,10 +1469,10 @@ function MobileStockSheet({
                     {formatPrice(stock.price)}
                   </span>
                   <span
-                    className={cn(
-                      "w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums",
-                      getChangeTextClass(stock.changePct, priceColorMode)
-                    )}
+                    className="w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums"
+                    style={{
+                      color: getChangeTextColor(heatTheme, stock.changePct, priceColorMode, displayMode),
+                    }}
                   >
                     {formatChange(stock.changePct)}
                   </span>
@@ -1505,10 +1500,10 @@ function MobileStockSheet({
                       {formatPrice(item.price)}
                     </span>
                     <span
-                      className={cn(
-                        "w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums",
-                        getChangeTextClass(item.changePct, priceColorMode)
-                      )}
+                      className="w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums"
+                      style={{
+                        color: getChangeTextColor(heatTheme, item.changePct, priceColorMode, displayMode),
+                      }}
                     >
                       {formatChange(item.changePct)}
                     </span>
@@ -1587,7 +1582,7 @@ function HeatmapLoadingOverlay({ displayMode, messages }: { displayMode: Display
       aria-busy="true"
       className={cn(
         "absolute inset-0 z-40 flex flex-col items-center justify-center gap-6 px-4 py-8 text-center backdrop-blur-[10px]",
-        isLightMode ? "bg-slate-50/92" : "bg-[#0a0d12]/92"
+        isLightMode ? "bg-[#f3f6fa]/94" : "bg-[#0a0d12]/92"
       )}
     >
       <div className="pointer-events-none w-full max-w-[min(92vw,420px)] select-none">
@@ -1606,7 +1601,7 @@ function HeatmapLoadingOverlay({ displayMode, messages }: { displayMode: Display
         <div
           className={cn(
             "grid h-[min(34vh,260px)] grid-cols-6 grid-rows-4 gap-1.5 rounded-md border p-2 shadow-[0_24px_80px_rgba(0,0,0,0.18)]",
-            isLightMode ? "border-slate-200 bg-white/88" : "border-white/[0.07] bg-[#10141b]/90"
+            isLightMode ? "border-slate-200/90 bg-white/92 shadow-[0_16px_48px_rgba(15,23,42,0.08)]" : "border-white/[0.07] bg-[#10141b]/90"
           )}
         >
           {heatmapLoadingBlocks.map((block, index) => (
@@ -1642,6 +1637,401 @@ function HeatmapLoadingOverlay({ displayMode, messages }: { displayMode: Display
   );
 }
 
+function getHeatThemeDisplayName(theme: HeatTheme, locale: Locale, messages: HeatmapMessages) {
+  if (theme.builtin) {
+    if (theme.id === "soft") return messages.heatThemeSoft;
+    if (theme.id === "classic") return messages.heatThemeClassic;
+    if (theme.id === "muted") return messages.heatThemeMuted;
+    if (theme.id === "high-contrast") return messages.heatThemeHighContrast;
+  }
+  return locale === "en" ? theme.nameEn : theme.nameZh;
+}
+
+function getHeatStopLabel(messages: HeatmapMessages, field: HeatStopField) {
+  if (field === "flat") return messages.heatStopFlat;
+  if (field === "positiveSoft") return messages.heatStopPositiveSoft;
+  if (field === "positiveStrong") return messages.heatStopPositiveStrong;
+  if (field === "negativeSoft") return messages.heatStopNegativeSoft;
+  return messages.heatStopNegativeStrong;
+}
+
+function HeatThemeSettingsPanel({
+  messages,
+  locale,
+  displayMode,
+  priceColorMode,
+  heatThemeId,
+  customHeatThemes,
+  activeHeatTheme,
+  onHeatThemeIdChange,
+  onCustomHeatThemesChange,
+}: {
+  messages: HeatmapMessages;
+  locale: Locale;
+  displayMode: DisplayMode;
+  priceColorMode: PriceColorMode;
+  heatThemeId: string;
+  customHeatThemes: HeatTheme[];
+  activeHeatTheme: HeatTheme;
+  onHeatThemeIdChange: (id: string) => void;
+  onCustomHeatThemesChange: (themes: HeatTheme[]) => void;
+}) {
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [draftTheme, setDraftTheme] = useState<HeatTheme | null>(null);
+  const [editMode, setEditMode] = useState<"dark" | "light">(displayMode);
+  const availableThemes = useMemo(
+    () => [...builtinHeatThemes, ...customHeatThemes],
+    [customHeatThemes]
+  );
+  const isEditing = Boolean(draftTheme);
+  const editingStops = draftTheme
+    ? editMode === "light"
+      ? draftTheme.light
+      : draftTheme.dark
+    : null;
+
+  useEffect(() => {
+    setEditMode(displayMode);
+  }, [displayMode]);
+
+  useEffect(() => {
+    setDraftTheme(null);
+  }, [heatThemeId]);
+
+  const startEditExisting = () => {
+    if (activeHeatTheme.builtin) {
+      return;
+    }
+    setDraftTheme(cloneHeatTheme(activeHeatTheme));
+    setEditMode(displayMode);
+  };
+
+  const startCreateCustom = () => {
+    const next = createCustomHeatTheme(
+      activeHeatTheme,
+      locale === "zh" ? `自定义 ${customHeatThemes.length + 1}` : `Custom ${customHeatThemes.length + 1}`,
+      `Custom ${customHeatThemes.length + 1}`
+    );
+    setDraftTheme(next);
+    setEditMode(displayMode);
+  };
+
+  const updateDraft = (updater: (theme: HeatTheme) => HeatTheme) => {
+    setDraftTheme((current) => (current ? updater(current) : current));
+  };
+
+  const handleSave = () => {
+    if (!draftTheme) {
+      return;
+    }
+    const exists = customHeatThemes.some((theme) => theme.id === draftTheme.id);
+    onCustomHeatThemesChange(
+      exists
+        ? customHeatThemes.map((theme) => (theme.id === draftTheme.id ? draftTheme : theme))
+        : [...customHeatThemes, draftTheme]
+    );
+    onHeatThemeIdChange(draftTheme.id);
+    setDraftTheme(null);
+    toast.success(messages.heatThemeSaved);
+  };
+
+  const handleCancel = () => {
+    setDraftTheme(null);
+  };
+
+  const handleDeleteCustom = () => {
+    if (activeHeatTheme.builtin || draftTheme) {
+      return;
+    }
+    const remaining = customHeatThemes.filter((theme) => theme.id !== activeHeatTheme.id);
+    onCustomHeatThemesChange(remaining);
+    onHeatThemeIdChange(defaultHeatThemeId);
+  };
+
+  const handleExport = () => {
+    try {
+      const payload = buildHeatThemeExport(draftTheme ?? activeHeatTheme);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${payload.theme.nameEn.replace(/\s+/g, "-").toLowerCase() || "heatmap-theme"}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error(messages.heatThemeExportFailed);
+    }
+  };
+
+  const handleImportFile = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    try {
+      const text = await file.text();
+      const imported = parseHeatThemeExport(text);
+      if (!imported) {
+        toast.error(messages.heatThemeImportFailed);
+        return;
+      }
+      setDraftTheme(imported);
+      setEditMode(displayMode);
+      toast.success(messages.heatThemeImportSuccess);
+    } catch {
+      toast.error(messages.heatThemeImportFailed);
+    } finally {
+      if (importInputRef.current) {
+        importInputRef.current.value = "";
+      }
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold">{messages.heatThemeLabel}</h3>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.heatThemeIntro}</p>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {availableThemes.map((theme) => {
+          const active = !isEditing && heatThemeId === theme.id;
+          const stops = displayMode === "light" ? theme.light : theme.dark;
+          return (
+            <button
+              key={theme.id}
+              type="button"
+              disabled={isEditing}
+              onClick={() => onHeatThemeIdChange(theme.id)}
+              aria-pressed={active}
+              className={cn(
+                "border px-3 py-2.5 text-left transition-colors",
+                active
+                  ? "border-brand/70 bg-brand/15"
+                  : "border-border bg-background/70 hover:bg-muted",
+                isEditing && "cursor-not-allowed opacity-55"
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-foreground">
+                  {getHeatThemeDisplayName(theme, locale, messages)}
+                </span>
+                {!theme.builtin && (
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {messages.heatThemeCustom}
+                  </span>
+                )}
+              </div>
+              <div
+                className="mt-2 h-2.5 w-full border border-border/70"
+                style={{
+                  background: previewGradientFromStops(stops, priceColorMode === "red-rise"),
+                }}
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {!isEditing && (
+          <>
+            <button
+              type="button"
+              onClick={startCreateCustom}
+              className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {messages.heatThemeCreateCustom}
+            </button>
+            {!activeHeatTheme.builtin && (
+              <button
+                type="button"
+                onClick={startEditExisting}
+                className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {messages.heatThemeEdit}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleExport}
+              className="inline-flex items-center gap-1.5 border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Download className="size-3.5" />
+              {messages.heatThemeExport}
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {messages.heatThemeImport}
+            </button>
+            {!activeHeatTheme.builtin && (
+              <button
+                type="button"
+                onClick={handleDeleteCustom}
+                className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-muted"
+              >
+                {messages.heatThemeDeleteCustom}
+              </button>
+            )}
+          </>
+        )}
+        <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)}
+        />
+      </div>
+
+      {draftTheme && editingStops && (
+        <div className="space-y-4 border border-brand/40 bg-brand/5 p-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">{messages.heatThemeEditingHint}</p>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="space-y-1.5 text-xs text-muted-foreground">
+              <span>{messages.heatThemeNameZh}</span>
+              <input
+                value={draftTheme.nameZh}
+                onChange={(event) =>
+                  updateDraft((theme) => ({ ...theme, nameZh: event.target.value }))
+                }
+                className="w-full border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
+              />
+            </label>
+            <label className="space-y-1.5 text-xs text-muted-foreground">
+              <span>{messages.heatThemeNameEn}</span>
+              <input
+                value={draftTheme.nameEn}
+                onChange={(event) =>
+                  updateDraft((theme) => ({ ...theme, nameEn: event.target.value }))
+                }
+                className="w-full border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setEditMode("dark")}
+              className={cn(
+                "border px-3 py-1.5 text-xs font-semibold transition-colors",
+                editMode === "dark"
+                  ? "border-brand/70 bg-brand/15 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {messages.heatThemeEditDark}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditMode("light")}
+              className={cn(
+                "border px-3 py-1.5 text-xs font-semibold transition-colors",
+                editMode === "light"
+                  ? "border-brand/70 bg-brand/15 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {messages.heatThemeEditLight}
+            </button>
+          </div>
+
+          <div
+            className="h-2.5 w-full border border-border/70"
+            style={{
+              background: previewGradientFromStops(editingStops, priceColorMode === "red-rise"),
+            }}
+          />
+
+          <div className="space-y-2">
+            {heatStopFields.map((field) => {
+              const color = editingStops[field];
+              const hex = rgbToHex(color);
+              return (
+                <label
+                  key={field}
+                  className="flex items-center justify-between gap-3 border border-border/80 bg-background/70 px-2.5 py-2"
+                >
+                  <span className="min-w-0 text-sm text-muted-foreground">
+                    {getHeatStopLabel(messages, field)}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={hex}
+                      onChange={(event) => {
+                        const next = parseHexColor(event.target.value);
+                        if (!next) {
+                          return;
+                        }
+                        updateDraft((theme) => ({
+                          ...theme,
+                          [editMode]: {
+                            ...theme[editMode],
+                            [field]: next,
+                          },
+                        }));
+                      }}
+                      className="size-8 cursor-pointer border border-border bg-transparent p-0"
+                    />
+                    <input
+                      value={hex}
+                      onChange={(event) => {
+                        const next = parseHexColor(event.target.value);
+                        if (!next) {
+                          return;
+                        }
+                        updateDraft((theme) => ({
+                          ...theme,
+                          [editMode]: {
+                            ...theme[editMode],
+                            [field]: next,
+                          },
+                        }));
+                      }}
+                      className="w-[7.5rem] border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-brand/60"
+                    />
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleSave}
+              className="border border-brand/70 bg-brand/20 px-3 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-brand/30"
+            >
+              {messages.heatThemeSave}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {messages.heatThemeCancel}
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              className="inline-flex items-center gap-1.5 border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Download className="size-3.5" />
+              {messages.heatThemeExport}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SettingsDrawer({
   open,
   tab,
@@ -1650,6 +2040,9 @@ function SettingsDrawer({
   displayMode,
   themeColor,
   priceColorMode,
+  heatThemeId,
+  customHeatThemes,
+  activeHeatTheme,
   shortcutBindings,
   onClose,
   onTabChange,
@@ -1657,6 +2050,8 @@ function SettingsDrawer({
   onDisplayModeChange,
   onThemeColorChange,
   onPriceColorModeChange,
+  onHeatThemeIdChange,
+  onCustomHeatThemesChange,
   onShortcutBindingsChange,
   onShortcutRecordingChange,
   areaTipMessage,
@@ -1668,6 +2063,9 @@ function SettingsDrawer({
   displayMode: DisplayMode;
   themeColor: ThemeColorKey;
   priceColorMode: PriceColorMode;
+  heatThemeId: string;
+  customHeatThemes: HeatTheme[];
+  activeHeatTheme: HeatTheme;
   shortcutBindings: ShortcutBindings;
   areaTipMessage: string;
   onClose: () => void;
@@ -1676,6 +2074,8 @@ function SettingsDrawer({
   onDisplayModeChange: (mode: DisplayMode) => void;
   onThemeColorChange: (theme: ThemeColorKey) => void;
   onPriceColorModeChange: (mode: PriceColorMode) => void;
+  onHeatThemeIdChange: (id: string) => void;
+  onCustomHeatThemesChange: (themes: HeatTheme[]) => void;
   onShortcutBindingsChange: (bindings: ShortcutBindings) => void;
   onShortcutRecordingChange: (recording: boolean) => void;
 }) {
@@ -1942,6 +2342,18 @@ function SettingsDrawer({
                     </button>
                   </div>
                 </section>
+
+                <HeatThemeSettingsPanel
+                  messages={messages}
+                  locale={locale}
+                  displayMode={displayMode}
+                  priceColorMode={priceColorMode}
+                  heatThemeId={heatThemeId}
+                  customHeatThemes={customHeatThemes}
+                  activeHeatTheme={activeHeatTheme}
+                  onHeatThemeIdChange={onHeatThemeIdChange}
+                  onCustomHeatThemesChange={onCustomHeatThemesChange}
+                />
               </div>
             )}
 
@@ -2083,6 +2495,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [displayMode, setDisplayMode] = useState<DisplayMode>("dark");
   const [themeColor, setThemeColor] = useState<ThemeColorKey>("red");
   const [priceColorMode, setPriceColorMode] = useState<PriceColorMode>("red-rise");
+  const [heatThemeId, setHeatThemeId] = useState(defaultHeatThemeId);
+  const [customHeatThemes, setCustomHeatThemes] = useState<HeatTheme[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
   const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => ({
@@ -2120,7 +2534,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const isEnglish = locale === "en";
   const isLightMode = displayMode === "light";
   const isMobile = useIsMobile();
-  const legendGradient = useMemo(() => getLegendGradient(priceColorMode), [priceColorMode]);
+  const activeHeatTheme = useMemo(
+    () => resolveHeatTheme(heatThemeId, customHeatThemes),
+    [customHeatThemes, heatThemeId]
+  );
+  const legendGradient = useMemo(
+    () => getLegendGradient(activeHeatTheme, priceColorMode, displayMode),
+    [activeHeatTheme, displayMode, priceColorMode]
+  );
   const heatmapCanvasTheme = heatmapCanvasThemes[displayMode];
   const brandStyle = useMemo(
     () =>
@@ -2130,8 +2551,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }) as CSSProperties,
     [themeColor]
   );
-  const riseTextClass = getRiseTextClass(priceColorMode);
-  const fallTextClass = getFallTextClass(priceColorMode);
+  const riseTextColor = getRiseTextColor(activeHeatTheme, priceColorMode, displayMode);
+  const fallTextColor = getFallTextColor(activeHeatTheme, priceColorMode, displayMode);
 
   const activeStockCode = isMobile ? selectedStockCode : hoveredStockCode;
   const activeBoardName = isMobile ? selectedBoardName : hoveredBoardName;
@@ -2197,6 +2618,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
       const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
       const storedShortcuts = window.localStorage.getItem(shortcutStorageKey);
+      const storedHeatThemeId = window.localStorage.getItem(heatThemeStorageKey);
+      const storedCustomHeatThemes = window.localStorage.getItem(customHeatThemesStorageKey);
 
       if (storedLocale === "zh" || storedLocale === "en") {
         setLocale(storedLocale);
@@ -2214,6 +2637,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         setSizeMode(storedSizeMode);
       }
       setShortcutBindings(parseStoredShortcuts(storedShortcuts));
+      const customThemes = parseStoredCustomHeatThemes(storedCustomHeatThemes);
+      setCustomHeatThemes(customThemes);
+      if (storedHeatThemeId) {
+        setHeatThemeId(resolveHeatTheme(storedHeatThemeId, customThemes).id);
+      }
     } catch {
       /* Preferences are optional. */
     } finally {
@@ -2292,6 +2720,18 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       /* Preferences are optional. */
     }
   }, [preferencesReady, shortcutBindings]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(heatThemeStorageKey, heatThemeId);
+      window.localStorage.setItem(customHeatThemesStorageKey, serializeCustomHeatThemes(customHeatThemes));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [customHeatThemes, heatThemeId, preferencesReady]);
 
   const areaTipMessage = useMemo(
     () => (sizeMode === "turnover" ? messages.tipAreaTurnover : messages.tipAreaMarketCap),
@@ -3151,7 +3591,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     for (const stock of layout.stockRects) {
-      context.fillStyle = getHeatColor(stock.changePct, priceColorMode);
+      context.fillStyle = getHeatColor(activeHeatTheme, stock.changePct, priceColorMode, displayMode);
       context.fillRect(stock.x, stock.y, stock.width, stock.height);
       drawStockLabel(context, stock, view.scale);
     }
@@ -3161,11 +3601,18 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         activeSubBoardName === subBoard.name && activeBoardName === subBoard.boardName;
 
       if (subBoard.titleHeight > 0) {
-        context.fillStyle = getBoardHeaderColor(subBoard.changePct, priceColorMode);
+        context.fillStyle = getBoardHeaderColor(
+          activeHeatTheme,
+          subBoard.changePct,
+          priceColorMode,
+          displayMode
+        );
         context.fillRect(subBoard.x, subBoard.y, subBoard.width, subBoard.titleHeight);
       }
 
-      context.strokeStyle = isActiveSubBoard ? "#5eead4" : heatmapCanvasTheme.subBoardBorder;
+      context.strokeStyle = isActiveSubBoard
+        ? heatmapCanvasTheme.activeSubBoardStroke
+        : heatmapCanvasTheme.subBoardBorder;
       context.lineWidth = isActiveSubBoard ? 2 : 0.9;
       context.strokeRect(
         subBoard.x + 0.5,
@@ -3210,7 +3657,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const showDrillHint = boardFilter === allBoardsValue && board.width > 72 && board.titleHeight > 10;
 
       if (board.titleHeight > 0) {
-        context.fillStyle = getBoardHeaderColor(board.changePct, priceColorMode);
+        context.fillStyle = getBoardHeaderColor(activeHeatTheme, board.changePct, priceColorMode, displayMode);
         context.fillRect(board.x, board.y, board.width, board.titleHeight);
 
         if (isActiveBoard || isTitleHovered) {
@@ -3219,7 +3666,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         }
       }
 
-      context.strokeStyle = isActiveBoard || isTitleHovered ? "#f6d36d" : heatmapCanvasTheme.boardBorder;
+      context.strokeStyle =
+        isActiveBoard || isTitleHovered
+          ? heatmapCanvasTheme.activeBoardStroke
+          : heatmapCanvasTheme.boardBorder;
       context.lineWidth = isActiveBoard || isTitleHovered ? 1.8 : 1;
       context.strokeRect(board.x + 0.5, board.y + 0.5, Math.max(0, board.width - 1), Math.max(0, board.height - 1));
 
@@ -3288,6 +3738,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     layout.subBoardRects,
     layout.stockRects,
     messages.boardBreadcrumbAll,
+    activeHeatTheme,
+    displayMode,
     priceColorMode,
     view.scale,
     view.x,
@@ -3960,8 +4412,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
 
       const background = context.createLinearGradient(0, 0, exportCanvas.width, exportCanvas.height);
-      background.addColorStop(0, isLightMode ? "#f8fafc" : "#151922");
-      background.addColorStop(1, isLightMode ? "#e9eef5" : "#0f1319");
+      background.addColorStop(0, isLightMode ? heatmapCanvasThemes.light.backgroundStart : "#151922");
+      background.addColorStop(1, isLightMode ? heatmapCanvasThemes.light.backgroundEnd : "#0f1319");
       context.fillStyle = background;
       context.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
       context.drawImage(sourceCanvas, horizontalPadding, topPadding);
@@ -4389,9 +4841,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       <span
                         className={cn(
                           "shrink-0 font-semibold tabular-nums",
-                          isEnglish ? "text-[10.5px]" : "text-[12px]",
-                          getChangeTextClass(summary?.changePct ?? 0, priceColorMode)
+                          isEnglish ? "text-[10.5px]" : "text-[12px]"
                         )}
+                        style={{
+                          color: getChangeTextColor(
+                            activeHeatTheme,
+                            summary?.changePct ?? 0,
+                            priceColorMode,
+                            displayMode
+                          ),
+                        }}
                       >
                         {summary ? formatCompactChange(summary.changePct) : "--"}
                       </span>
@@ -4579,10 +5038,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 <div className={cn("mt-1.5 border border-border bg-muted/28 p-1.5", isEnglish && "mt-1 p-[5px]")}>
                   <div className={cn("grid grid-cols-3 gap-2", isEnglish && "gap-1.5")}>
                     <div className="flex min-w-0 flex-col items-center text-center">
-                      <p className={cn("tracking-[0.06em]", riseTextClass, isEnglish ? "text-[10px]" : "text-[11px]")}>
+                      <p
+                        className={cn("tracking-[0.06em]", isEnglish ? "text-[10px]" : "text-[11px]")}
+                        style={{ color: riseTextColor }}
+                      >
                         {messages.legendRise}
                       </p>
-                      <p className={cn("mt-1 font-semibold tabular-nums", riseTextClass, isEnglish ? "text-[13px]" : "text-base")}>
+                      <p
+                        className={cn("mt-1 font-semibold tabular-nums", isEnglish ? "text-[13px]" : "text-base")}
+                        style={{ color: riseTextColor }}
+                      >
                         {formatCount(marketOverview.advanceCount, locale)}
                       </p>
                     </div>
@@ -4601,15 +5066,15 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     </div>
                     <div className="flex min-w-0 flex-col items-center text-center">
                       <p
-                        className={cn(
-                          "tracking-[0.06em]",
-                          fallTextClass,
-                          isEnglish ? "text-[10px]" : "text-[11px]"
-                        )}
+                        className={cn("tracking-[0.06em]", isEnglish ? "text-[10px]" : "text-[11px]")}
+                        style={{ color: fallTextColor }}
                       >
                         {messages.legendFall}
                       </p>
-                      <p className={cn("mt-1 font-semibold tabular-nums", fallTextClass, isEnglish ? "text-[13px]" : "text-base")}>
+                      <p
+                        className={cn("mt-1 font-semibold tabular-nums", isEnglish ? "text-[13px]" : "text-base")}
+                        style={{ color: fallTextColor }}
+                      >
                         {formatCount(marketOverview.declineCount, locale)}
                       </p>
                     </div>
@@ -4645,32 +5110,47 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                               : messages.turnoverFlatLabel;
                         const turnoverTrendColor =
                           turnoverTrend === "up"
-                            ? riseTextClass
+                            ? riseTextColor
                             : turnoverTrend === "down"
-                              ? fallTextClass
-                              : "text-muted-foreground";
+                              ? fallTextColor
+                              : undefined;
 
                         return (
                           <>
                             {isEnglish ? (
                               <div className="space-y-0.5 text-[9px] leading-tight tracking-[0.04em] text-muted-foreground">
                                 <span className="block">{messages.comparedToYesterdayLabel}</span>
-                                <span className={cn("block font-semibold", turnoverTrendColor)}>
+                                <span
+                                  className={cn(
+                                    "block font-semibold",
+                                    !turnoverTrendColor && "text-muted-foreground"
+                                  )}
+                                  style={turnoverTrendColor ? { color: turnoverTrendColor } : undefined}
+                                >
                                   {turnoverTrendLabel}
                                 </span>
                               </div>
                             ) : (
                               <p className="text-[10px] leading-tight tracking-[0.04em] text-muted-foreground">
                                 {messages.comparedToYesterdayLabel}
-                                <span className={cn("ml-1 font-semibold", turnoverTrendColor)}>{turnoverTrendLabel}</span>
+                                <span
+                                  className={cn(
+                                    "ml-1 font-semibold",
+                                    !turnoverTrendColor && "text-muted-foreground"
+                                  )}
+                                  style={turnoverTrendColor ? { color: turnoverTrendColor } : undefined}
+                                >
+                                  {turnoverTrendLabel}
+                                </span>
                               </p>
                             )}
                             <p
                               className={cn(
                                 "mt-auto whitespace-nowrap pt-1 font-semibold tracking-[-0.01em]",
                                 isEnglish ? "text-[11.5px] sm:text-[12px]" : "text-[13px] sm:text-[14px]",
-                                turnoverTrendColor
+                                !turnoverTrendColor && "text-muted-foreground"
                               )}
+                              style={turnoverTrendColor ? { color: turnoverTrendColor } : undefined}
                             >
                               {formatTurnoverAmount(Math.abs(marketOverview.turnoverDelta), locale)}
                             </p>
@@ -4756,16 +5236,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         <div
           className={cn(
             "relative min-h-0 overflow-hidden",
-            isLightMode ? "bg-[#e9eef5]" : "bg-[#10141b]",
             isFullscreen ? "col-start-1 h-full" : "col-start-1 row-start-1 md:col-start-2"
           )}
+          style={{ backgroundColor: heatmapCanvasTheme.chrome }}
         >
           <div
             ref={viewportRef}
-            className={cn(
-              "relative h-full min-h-0 overflow-hidden",
-              isLightMode ? "bg-[#e9eef5]" : "bg-[#10141b]"
-            )}
+            className="relative h-full min-h-0 overflow-hidden"
+            style={{ backgroundColor: heatmapCanvasTheme.chrome }}
           >
             {isFullscreen && isMobile && (
               <button
@@ -4830,8 +5308,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       className="flex items-center gap-2 border-b border-black/15 px-3 py-1.5"
                       style={{
                         backgroundColor: getBoardHeaderColor(
+                          activeHeatTheme,
                           activeInspectorStock.changePct,
-                          priceColorMode
+                          priceColorMode,
+                          displayMode
                         ),
                       }}
                       title={activeInspectorTitle ?? undefined}
@@ -4853,10 +5333,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                           {formatTurnoverAmount(activeInspectorStock.marketCap, locale)}
                         </span>
                         <span
-                          className={cn(
-                            "text-[13px] font-semibold leading-none",
-                            getChangeTextClass(activeInspectorStock.changePct, priceColorMode, "soft")
-                          )}
+                          className="text-[13px] font-semibold leading-none"
+                          style={{
+                            color: getChangeTextColor(
+                              activeHeatTheme,
+                              activeInspectorStock.changePct,
+                              priceColorMode,
+                              displayMode,
+                              "soft"
+                            ),
+                          }}
                         >
                           {formatChange(activeInspectorStock.changePct)}
                         </span>
@@ -4931,10 +5417,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                                 {formatPrice(stock.price)}
                               </span>
                               <span
-                                className={cn(
-                                  "text-right text-[11.5px] font-medium tabular-nums",
-                                  getChangeTextClass(stock.changePct, priceColorMode, "strong")
-                                )}
+                                className="text-right text-[11.5px] font-medium tabular-nums"
+                                style={{
+                                  color: getChangeTextColor(
+                                    activeHeatTheme,
+                                    stock.changePct,
+                                    priceColorMode,
+                                    displayMode,
+                                    "strong"
+                                  ),
+                                }}
                               >
                                 {formatChange(stock.changePct)}
                               </span>
@@ -4962,11 +5454,66 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           <div
             className={cn(
               "col-span-1 row-start-2 border-t border-border px-3 py-1.5 sm:px-4 md:col-start-2",
-              isLightMode ? "bg-card/95" : "bg-[#151a21]"
+              isLightMode ? "bg-white/88 backdrop-blur-sm" : "bg-[#151a21]"
             )}
           >
-            <div className="flex items-center justify-between gap-2 sm:gap-3">
-              <div className="flex min-w-0 items-center gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="flex min-w-0 shrink-0 items-center gap-1.5 sm:gap-2">
+                <a
+                  href={githubProjectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={messages.githubProject}
+                  title={messages.githubProject}
+                  className={cn(
+                    "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand",
+                    isLightMode
+                      ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                      : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                  )}
+                >
+                  <GitHubMark className="size-3.5" />
+                </a>
+                <a
+                  href="https://map.wenyuanw.me"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="min-w-0 truncate text-[11px] font-semibold tracking-tight text-brand transition-colors hover:text-brand/85 sm:text-[12px]"
+                >
+                  map<span className="text-brand/65">.wenyuanw.me</span>
+                </a>
+              </div>
+
+              <div className="flex min-w-0 flex-1 justify-center px-1 sm:px-2">
+                <div className="flex w-full max-w-[11rem] items-center gap-1.5 sm:max-w-52 md:max-w-56">
+                  <TrendingDown
+                    className="size-3 shrink-0"
+                    style={{ color: fallTextColor }}
+                    aria-label={messages.legendFall}
+                  />
+                  <div className="relative min-w-0 flex-1">
+                    <div
+                      className="h-3.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
+                      style={{ background: legendGradient }}
+                    />
+                    <div
+                      className="pointer-events-none absolute inset-0 flex items-center justify-between px-1 text-[8px] font-semibold tabular-nums leading-none text-white md:text-[9px]"
+                      style={{ textShadow: "0 1px 2px rgba(0, 0, 0, 0.55)" }}
+                    >
+                      {legendTicks.map((tick) => (
+                        <span key={tick}>{tick === 0 ? "0" : formatCompactChange(tick)}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <TrendingUp
+                    className="size-3 shrink-0"
+                    style={{ color: riseTextColor }}
+                    aria-label={messages.legendRise}
+                  />
+                </div>
+              </div>
+
+              <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
                 <div className="group relative shrink-0">
                   <button
                     type="button"
@@ -4986,9 +5533,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   </button>
                   <div
                     className={cn(
-                      "pointer-events-none absolute bottom-full left-0 z-40 mb-2 w-64 border p-2 text-[11px] leading-5 opacity-0 shadow-[0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+                      "pointer-events-none absolute bottom-full right-0 z-40 mb-2 w-64 border p-2 text-[11px] leading-5 opacity-0 shadow-[0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
                       isLightMode
-                        ? "border-border bg-popover/96 text-popover-foreground"
+                        ? "border-border bg-white/96 text-popover-foreground shadow-[0_12px_36px_rgba(15,23,42,0.12)]"
                         : "border-slate-700/90 bg-[#0f1319]/96 text-slate-300"
                     )}
                   >
@@ -5006,12 +5553,20 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   </div>
                 </div>
 
-                <a
-                  href={githubProjectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={messages.githubProject}
-                  title={messages.githubProject}
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode((current) => (current === "dark" ? "light" : "dark"))}
+                  aria-label={isLightMode ? messages.darkMode : messages.lightMode}
+                  title={
+                    isMobile
+                      ? isLightMode
+                        ? messages.darkMode
+                        : messages.lightMode
+                      : withShortcutTitle(
+                          isLightMode ? messages.darkMode : messages.lightMode,
+                          shortcutBindings.displayMode
+                        )
+                  }
                   className={cn(
                     "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand",
                     isLightMode
@@ -5019,44 +5574,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
                   )}
                 >
-                  <GitHubMark className="size-3.5" />
-                </a>
-
-                <a
-                  href="https://map.wenyuanw.me"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="min-w-0 truncate text-[11px] font-semibold tracking-tight text-brand transition-colors hover:text-brand/85 sm:text-[12px]"
-                >
-                  map<span className="text-brand/65">.wenyuanw.me</span>
-                </a>
-              </div>
-
-              <div className="flex items-center gap-2 sm:gap-3">
-                <div className="flex w-36 items-center gap-1.5 sm:w-52 md:w-56">
-                  <TrendingDown
-                    className={cn("size-3 shrink-0", fallTextClass)}
-                    aria-label={messages.legendFall}
-                  />
-                  <div className="relative flex-1">
-                    <div
-                      className="h-3.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
-                      style={{ background: legendGradient }}
-                    />
-                    <div
-                      className="pointer-events-none absolute inset-0 flex items-center justify-between px-1 text-[8px] font-semibold tabular-nums leading-none text-white md:text-[9px]"
-                      style={{ textShadow: "0 1px 2px rgba(0, 0, 0, 0.55)" }}
-                    >
-                      {legendTicks.map((tick) => (
-                        <span key={tick}>{tick === 0 ? "0" : formatCompactChange(tick)}</span>
-                      ))}
-                    </div>
-                  </div>
-                  <TrendingUp
-                    className={cn("size-3 shrink-0", riseTextClass)}
-                    aria-label={messages.legendRise}
-                  />
-                </div>
+                  {isLightMode ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
+                </button>
 
                 <button
                   type="button"
@@ -5084,6 +5603,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           stocks={inspectorStocks}
           messages={messages}
           priceColorMode={priceColorMode}
+          heatTheme={activeHeatTheme}
+          displayMode={displayMode}
           sortKey={inspectorSortKey}
           onSortChange={setInspectorSortKey}
           onClose={closeMobileSheet}
@@ -5100,6 +5621,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         displayMode={displayMode}
         themeColor={themeColor}
         priceColorMode={priceColorMode}
+        heatThemeId={heatThemeId}
+        customHeatThemes={customHeatThemes}
+        activeHeatTheme={activeHeatTheme}
         shortcutBindings={shortcutBindings}
         areaTipMessage={areaTipMessage}
         onClose={() => setSettingsOpen(false)}
@@ -5108,6 +5632,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         onDisplayModeChange={setDisplayMode}
         onThemeColorChange={setThemeColor}
         onPriceColorModeChange={setPriceColorMode}
+        onHeatThemeIdChange={setHeatThemeId}
+        onCustomHeatThemesChange={setCustomHeatThemes}
         onShortcutBindingsChange={setShortcutBindings}
         onShortcutRecordingChange={setShortcutRecording}
       />
