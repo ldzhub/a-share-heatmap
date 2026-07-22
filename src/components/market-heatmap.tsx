@@ -18,8 +18,10 @@ import {
   Info,
   Keyboard,
   Loader2,
+  Mail,
   Menu,
   Maximize2,
+  Megaphone,
   Minimize2,
   Moon,
   Palette,
@@ -195,6 +197,8 @@ const minZoom = 1;
 const maxZoom = 3;
 const flatThreshold = 0.1;
 const githubProjectUrl = "https://github.com/wenyuanw/a-share-heatmap";
+const authorEmail = "hi@wenyuanw.me";
+const authorMailto = `mailto:${authorEmail}`;
 
 const themeColors: Record<
   ThemeColorKey,
@@ -2465,19 +2469,82 @@ function SettingsDrawer({
             )}
 
             {tab === "project" && (
-              <section>
-                <h3 className="text-sm font-semibold">{messages.githubProject}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.githubProjectDescription}</p>
-                <a
-                  href={githubProjectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-4 inline-flex items-center gap-2 border border-border bg-background/80 px-3 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-muted"
-                >
-                  <ExternalLink className="size-4" />
-                  github.com/wenyuanw/a-share-heatmap
-                </a>
-              </section>
+              <div className="space-y-4">
+                <section className="border border-border bg-background/70 p-3.5">
+                  <div className="flex items-start gap-3">
+                    <span className="inline-flex size-9 shrink-0 items-center justify-center border border-border bg-muted/40 text-foreground">
+                      <GitHubMark className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold">{messages.githubProject}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {messages.githubProjectDescription}
+                      </p>
+                      <a
+                        href={githubProjectUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand transition-colors hover:text-brand/80"
+                      >
+                        github.com/wenyuanw/a-share-heatmap
+                        <ExternalLink className="size-3.5 opacity-80" />
+                      </a>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="border border-border bg-background/70 p-3.5">
+                  <div className="flex items-start gap-3">
+                    <span className="inline-flex size-9 shrink-0 items-center justify-center border border-border bg-muted/40 text-foreground">
+                      <Mail className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold">{messages.projectAuthorTitle}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {messages.projectAuthorDescription}
+                      </p>
+                      <a
+                        href={authorMailto}
+                        className="mt-3 inline-flex items-center gap-1.5 font-mono text-[12px] font-semibold text-foreground transition-colors hover:text-brand"
+                      >
+                        {messages.projectAuthorEmail}
+                      </a>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="relative overflow-hidden border border-dashed border-brand/45 bg-brand/8 p-3.5">
+                  <div
+                    className="pointer-events-none absolute -right-6 -top-6 size-24 rotate-12 border border-brand/20 bg-brand/10"
+                    aria-hidden
+                  />
+                  <div className="relative flex items-start gap-3">
+                    <span className="inline-flex size-9 shrink-0 items-center justify-center border border-brand/40 bg-brand/15 text-brand">
+                      <Megaphone className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-foreground">{messages.projectAdTitle}</h3>
+                        <span className="border border-brand/40 bg-brand/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-brand">
+                          OPEN
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                        {messages.projectAdDescription}
+                      </p>
+                      <a
+                        href={`${authorMailto}?subject=${encodeURIComponent(
+                          locale === "zh" ? "广告位招租咨询" : "Ad slot inquiry"
+                        )}`}
+                        className="mt-3 inline-flex items-center gap-1.5 border border-brand/50 bg-brand/15 px-2.5 py-1.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-brand/25"
+                      >
+                        {messages.projectAdCta}
+                        <Mail className="size-3.5 opacity-80" />
+                      </a>
+                    </div>
+                  </div>
+                </section>
+              </div>
             )}
           </div>
         </div>
