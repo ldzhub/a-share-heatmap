@@ -4473,13 +4473,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     try {
       const pixelRatio = sourceCanvas.width / Math.max(1, canvasSize.width);
       const baseWidth = Math.max(1, canvasSize.width);
-      const cssFontPx = clamp(baseWidth * 0.012, 11, 16);
-      const cssHorizontalPadding = clamp(baseWidth * 0.015, 12, 22);
-      const cssTopPadding = cssFontPx * 2 + 8;
-      const cssBottomPadding = 18;
+      const cssFontPx = clamp(baseWidth * 0.0085, 9, 11);
+      const cssHorizontalPadding = clamp(baseWidth * 0.008, 6, 12);
+      const cssBandPadding = cssFontPx * 1.55 + 2;
       const horizontalPadding = cssHorizontalPadding * pixelRatio;
-      const topPadding = cssTopPadding * pixelRatio;
-      const bottomPadding = cssBottomPadding * pixelRatio;
+      const topPadding = cssBandPadding * pixelRatio;
+      const bottomPadding = cssBandPadding * pixelRatio;
       const fontPx = cssFontPx * pixelRatio;
       const exportCanvas = document.createElement("canvas");
       exportCanvas.width = Math.round(sourceCanvas.width + horizontalPadding * 2);
@@ -4513,8 +4512,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       const shareTitle =
         baseWidth < 520
-          ? `大 A 云图 ${getCompactPeriodLabel(period, "zh")} ${formatShareTimestamp(updatedAt)}`
-          : `大 A 云图｜${getPeriodLabel(messages, period)} ${formatShareTimestamp(updatedAt)}`;
+          ? `${messages.title} ${getCompactPeriodLabel(period, "zh")} ${formatShareTimestamp(updatedAt)}`
+          : `${messages.title}｜${getPeriodLabel(messages, period)} ${formatShareTimestamp(updatedAt)}`;
       const shareUrlLight = isLightMode ? "rgba(15, 23, 42, 0.96)" : "rgba(247, 250, 252, 0.98)";
       const shareUrlParts: { text: string; fillStyle: string }[] = [
         { text: "map.wenyuanw", fillStyle: shareUrlLight },
@@ -4522,6 +4521,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       ];
 
       const headerY = topPadding / 2;
+      const footerY = exportCanvas.height - bottomPadding / 2;
       const rightEdge = exportCanvas.width - horizontalPadding;
 
       context.save();
@@ -4538,22 +4538,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         urlX += context.measureText(part.text).width;
       }
 
-      const leftBlockEnd = urlX;
-      const minCenterGap = fontPx * 0.85;
       context.textAlign = "right";
       context.fillStyle = isLightMode ? "rgba(15, 23, 42, 0.92)" : "rgba(247, 250, 252, 0.96)";
-      let titleFontPx = fontPx;
-      context.font = `600 ${titleFontPx}px Arial, sans-serif`;
-      const titleWidth = context.measureText(shareTitle).width;
-      const titleMaxWidth = Math.max(0, rightEdge - leftBlockEnd - minCenterGap);
-      if (titleWidth > titleMaxWidth && titleMaxWidth > fontPx * 1.5) {
-        titleFontPx = Math.max(
-          fontPx * 0.62,
-          Math.min(titleFontPx, (titleFontPx * titleMaxWidth) / titleWidth)
-        );
-        context.font = `600 ${titleFontPx}px Arial, sans-serif`;
-      }
-      context.fillText(shareTitle, rightEdge, headerY);
+      context.font = `600 ${fontPx}px Arial, sans-serif`;
+      context.fillText(shareTitle, rightEdge, footerY);
       context.restore();
 
       const blob = await canvasToBlob(exportCanvas);
@@ -5537,31 +5525,22 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
             )}
           >
             <div className="flex items-center gap-2 sm:gap-3">
-              <div className="flex min-w-0 shrink-0 items-center gap-1.5 sm:gap-2">
-                <a
-                  href={githubProjectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={messages.githubProject}
-                  title={messages.githubProject}
-                  className={cn(
-                    "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand",
-                    isLightMode
-                      ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
-                      : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
-                  )}
-                >
-                  <GitHubMark className="size-3.5" />
-                </a>
-                <a
-                  href="https://map.wenyuanw.me"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="min-w-0 truncate text-[11px] font-semibold tracking-tight text-brand transition-colors hover:text-brand/85 sm:text-[12px]"
-                >
-                  map<span className="text-brand/65">.wenyuanw.me</span>
-                </a>
-              </div>
+              <a
+                href={githubProjectUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={messages.githubProject}
+                title={messages.githubProject}
+                className={cn(
+                  "inline-flex min-w-0 shrink-0 items-center gap-1.5 text-[11px] font-normal tracking-tight transition-colors sm:text-[12px]",
+                  isLightMode
+                    ? "text-muted-foreground/60 hover:text-muted-foreground"
+                    : "text-slate-500/75 hover:text-slate-400"
+                )}
+              >
+                <GitHubMark className="size-3.5 shrink-0 opacity-80" />
+                <span className="min-w-0 truncate">map.wenyuanw.me</span>
+              </a>
 
               <div className="flex min-w-0 flex-1 justify-center px-1 sm:px-2">
                 <div className="flex w-full max-w-[11rem] items-center gap-1.5 sm:max-w-52 md:max-w-56">
@@ -5718,8 +5697,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       />
 
       {sharePreview && (
-        <div className="absolute inset-0 z-[10020] flex items-center justify-center bg-black/72 p-4 backdrop-blur-sm">
-          <div className="flex max-h-full w-full max-w-5xl flex-col border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+        <div className="absolute inset-0 z-[10020] flex items-center justify-center bg-black/72 p-2 backdrop-blur-sm sm:p-3">
+          <div className="flex max-h-[min(96vh,100%)] w-full max-w-[min(96vw,90rem)] flex-col border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div>
                 <h3 className="text-base font-semibold">{messages.sharePreviewTitle}</h3>
@@ -5734,12 +5713,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </button>
             </div>
 
-            <div className={cn("min-h-0 flex-1 overflow-auto p-4", isLightMode ? "bg-muted/45" : "bg-[#0f1319]")}>
+            <div className={cn("min-h-0 flex-1 overflow-auto p-3 sm:p-4", isLightMode ? "bg-muted/45" : "bg-[#0f1319]")}>
               <img
                 src={sharePreview.url}
                 alt={messages.sharePreviewTitle}
                 className={cn(
-                  "mx-auto h-auto max-w-full border shadow-[0_18px_60px_rgba(0,0,0,0.32)]",
+                  "mx-auto h-auto max-h-[calc(96vh-9.5rem)] w-auto max-w-full object-contain border shadow-[0_18px_60px_rgba(0,0,0,0.32)]",
                   isLightMode ? "border-border bg-background" : "border-slate-700/80 bg-[#10141b]"
                 )}
               />
