@@ -16,6 +16,7 @@ import {
   Download,
   ExternalLink,
   Info,
+  Keyboard,
   Loader2,
   Menu,
   Maximize2,
@@ -35,6 +36,19 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getMessages, type HeatmapMessages, type Locale } from "@/lib/i18n";
+import {
+  defaultShortcutBindings,
+  formatShortcutKey,
+  formatShortcutLabel,
+  parseStoredShortcuts,
+  resolveShortcutAction,
+  serializeShortcuts,
+  shortcutActionIds,
+  shortcutStorageKey,
+  withReboundShortcut,
+  type ShortcutActionId,
+  type ShortcutBindings,
+} from "@/lib/heatmap-shortcuts";
 import {
   heatmapPeriodKeys,
   type HeatmapPeriodKey,
@@ -139,7 +153,7 @@ type ScreenshotPreview = {
 type PriceColorMode = "red-rise" | "green-rise";
 type ThemeColorKey = "green" | "red" | "blue" | "violet";
 type DisplayMode = "dark" | "light";
-type SettingsTab = "appearance" | "help" | "project";
+type SettingsTab = "appearance" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
 const refreshIntervalMs = 8000;
@@ -644,6 +658,19 @@ function formatShareTimestamp(value: string) {
     second: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+function getShortcutActionLabel(messages: HeatmapMessages, action: ShortcutActionId) {
+  if (action === "share") return messages.shortcutActionShare;
+  if (action === "resetView") return messages.shortcutActionResetView;
+  if (action === "fullscreen") return messages.shortcutActionFullscreen;
+  if (action === "settings") return messages.shortcutActionSettings;
+  if (action === "sidebar") return messages.shortcutActionSidebar;
+  return messages.shortcutActionDisplayMode;
+}
+
+function withShortcutTitle(label: string, key: string) {
+  return `${label} (${formatShortcutLabel(key)})`;
 }
 
 function getMarketLabel(messages: HeatmapMessages, market: MarketKey) {
@@ -1623,12 +1650,15 @@ function SettingsDrawer({
   displayMode,
   themeColor,
   priceColorMode,
+  shortcutBindings,
   onClose,
   onTabChange,
   onLocaleChange,
   onDisplayModeChange,
   onThemeColorChange,
   onPriceColorModeChange,
+  onShortcutBindingsChange,
+  onShortcutRecordingChange,
   areaTipMessage,
 }: {
   open: boolean;
@@ -1638,6 +1668,7 @@ function SettingsDrawer({
   displayMode: DisplayMode;
   themeColor: ThemeColorKey;
   priceColorMode: PriceColorMode;
+  shortcutBindings: ShortcutBindings;
   areaTipMessage: string;
   onClose: () => void;
   onTabChange: (tab: SettingsTab) => void;
@@ -1645,7 +1676,73 @@ function SettingsDrawer({
   onDisplayModeChange: (mode: DisplayMode) => void;
   onThemeColorChange: (theme: ThemeColorKey) => void;
   onPriceColorModeChange: (mode: PriceColorMode) => void;
+  onShortcutBindingsChange: (bindings: ShortcutBindings) => void;
+  onShortcutRecordingChange: (recording: boolean) => void;
 }) {
+  const [recordingAction, setRecordingAction] = useState<ShortcutActionId | null>(null);
+
+  useEffect(() => {
+    if (!open || tab !== "shortcuts") {
+      setRecordingAction(null);
+    }
+  }, [open, tab]);
+
+  useEffect(() => {
+    onShortcutRecordingChange(Boolean(recordingAction));
+    return () => {
+      onShortcutRecordingChange(false);
+    };
+  }, [onShortcutRecordingChange, recordingAction]);
+
+  useEffect(() => {
+    if (!open || !recordingAction) {
+      return;
+    }
+
+    const action = recordingAction;
+
+    function onKeyDown(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setRecordingAction(null);
+        return;
+      }
+
+      const key = formatShortcutKey(event);
+      if (!key) {
+        toast.error(messages.settingsShortcutsInvalid, { id: "shortcut-remap" });
+        return;
+      }
+
+      const result = withReboundShortcut(shortcutBindings, action, key);
+      if (result.invalid) {
+        toast.error(messages.settingsShortcutsInvalid, { id: "shortcut-remap" });
+        return;
+      }
+
+      if (result.conflict) {
+        toast.error(
+          messages.settingsShortcutsConflict.replace(
+            "{action}",
+            getShortcutActionLabel(messages, result.conflict)
+          ),
+          { id: "shortcut-remap" }
+        );
+        return;
+      }
+
+      onShortcutBindingsChange(result.bindings);
+      setRecordingAction(null);
+    }
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [messages, onShortcutBindingsChange, open, recordingAction, shortcutBindings]);
+
   if (!open) {
     return null;
   }
@@ -1659,10 +1756,10 @@ function SettingsDrawer({
     messages.tipDrag,
     messages.tipInspectorScroll,
     messages.tipInspectorSort,
-    messages.tipFullscreen,
   ];
   const tabs: Array<{ key: SettingsTab; label: string; icon: typeof Palette }> = [
     { key: "appearance", label: messages.settingsAppearance, icon: Palette },
+    { key: "shortcuts", label: messages.settingsShortcuts, icon: Keyboard },
     { key: "help", label: messages.settingsHelp, icon: Info },
     { key: "project", label: messages.settingsProject, icon: ExternalLink },
   ];
@@ -1848,18 +1945,109 @@ function SettingsDrawer({
               </div>
             )}
 
-            {tab === "help" && (
-              <section>
-                <h3 className="text-sm font-semibold">{messages.helpTitle}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.helpIntro}</p>
-                <div className="mt-4 space-y-2">
-                  {helpItems.map((item) => (
-                    <div key={item} className="border border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
-                      {item.replace(/^·\s*/, "")}
-                    </div>
-                  ))}
+            {tab === "shortcuts" && (
+              <section className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold">{messages.settingsShortcuts}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {messages.settingsShortcutsIntro}
+                  </p>
                 </div>
+                <div className="space-y-2">
+                  {shortcutActionIds.map((action) => {
+                    const active = recordingAction === action;
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        onClick={() =>
+                          setRecordingAction((current) => (current === action ? null : action))
+                        }
+                        className={cn(
+                          "flex w-full items-center justify-between gap-3 border px-3 py-2.5 text-left transition-colors",
+                          active
+                            ? "border-brand/70 bg-brand/15"
+                            : "border-border bg-background/70 hover:bg-muted"
+                        )}
+                      >
+                        <span className="min-w-0 text-sm font-medium text-foreground">
+                          {getShortcutActionLabel(messages, action)}
+                        </span>
+                        <span
+                          className={cn(
+                            "inline-flex min-w-10 shrink-0 items-center justify-center border px-2 py-1 font-mono text-xs font-semibold",
+                            active
+                              ? "border-brand/50 bg-background/80 text-foreground"
+                              : "border-border bg-muted/40 text-muted-foreground"
+                          )}
+                        >
+                          {active
+                            ? messages.settingsShortcutsRecording
+                            : formatShortcutLabel(shortcutBindings[action])}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecordingAction(null);
+                    onShortcutBindingsChange({ ...defaultShortcutBindings });
+                  }}
+                  className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {messages.settingsShortcutsReset}
+                </button>
               </section>
+            )}
+
+            {tab === "help" && (
+              <div className="space-y-6">
+                <section>
+                  <h3 className="text-sm font-semibold">{messages.helpTitle}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.helpIntro}</p>
+                  <div className="mt-4 space-y-2">
+                    {helpItems.map((item) => (
+                      <div
+                        key={item}
+                        className="border border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground"
+                      >
+                        {item.replace(/^·\s*/, "")}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <h3 className="text-sm font-semibold">{messages.helpShortcutsTitle}</h3>
+                  <div className="mt-3 overflow-hidden border border-border">
+                    {shortcutActionIds.map((action, index) => (
+                      <div
+                        key={action}
+                        className={cn(
+                          "flex items-center justify-between gap-3 bg-background/70 px-3 py-2 text-sm",
+                          index > 0 && "border-t border-border"
+                        )}
+                      >
+                        <span className="min-w-0 text-muted-foreground">
+                          {getShortcutActionLabel(messages, action)}
+                        </span>
+                        <span className="inline-flex min-w-8 shrink-0 items-center justify-center border border-border bg-muted/40 px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
+                          {formatShortcutLabel(shortcutBindings[action])}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onTabChange("shortcuts")}
+                    className="mt-3 border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    {messages.helpShortcutsCta}
+                  </button>
+                </section>
+              </div>
             )}
 
             {tab === "project" && (
@@ -1897,6 +2085,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [priceColorMode, setPriceColorMode] = useState<PriceColorMode>("red-rise");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => ({
+    ...defaultShortcutBindings,
+  }));
+  const [shortcutRecording, setShortcutRecording] = useState(false);
   const [market, setMarket] = useState<MarketKey>("all");
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
   const [boardFilter, setBoardFilter] = useState(allBoardsValue);
@@ -2004,6 +2196,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedTheme = window.localStorage.getItem("heatmap-theme-color");
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
       const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
+      const storedShortcuts = window.localStorage.getItem(shortcutStorageKey);
 
       if (storedLocale === "zh" || storedLocale === "en") {
         setLocale(storedLocale);
@@ -2020,6 +2213,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
         setSizeMode(storedSizeMode);
       }
+      setShortcutBindings(parseStoredShortcuts(storedShortcuts));
     } catch {
       /* Preferences are optional. */
     } finally {
@@ -2087,6 +2281,17 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       /* Preferences are optional. */
     }
   }, [preferencesReady, sizeMode]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(shortcutStorageKey, serializeShortcuts(shortcutBindings));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, shortcutBindings]);
 
   const areaTipMessage = useMemo(
     () => (sizeMode === "turnover" ? messages.tipAreaTurnover : messages.tipAreaMarketCap),
@@ -2168,24 +2373,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       document.body.classList.remove("heatmap-page-active");
     };
   }, []);
-
-  useEffect(() => {
-    if (!isFullscreen) {
-      return;
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsFullscreen(false);
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isFullscreen]);
 
   useEffect(() => {
     if (inspectorListRef.current) {
@@ -3989,6 +4176,106 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     });
   }, []);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      if (
+        target?.isContentEditable ||
+        tagName === "INPUT" ||
+        tagName === "TEXTAREA" ||
+        tagName === "SELECT"
+      ) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (shortcutRecording) {
+          return;
+        }
+        if (sharePreview) {
+          event.preventDefault();
+          closeSharePreview();
+          return;
+        }
+        if (settingsOpen) {
+          event.preventDefault();
+          setSettingsOpen(false);
+          return;
+        }
+        if (isFullscreen) {
+          event.preventDefault();
+          setIsFullscreen(false);
+        }
+        return;
+      }
+
+      if (shortcutRecording) {
+        return;
+      }
+
+      const action = resolveShortcutAction(shortcutBindings, event);
+      if (!action) {
+        return;
+      }
+
+      if (sharePreview) {
+        return;
+      }
+
+      if (settingsOpen && action !== "settings") {
+        return;
+      }
+
+      if (action === "share" && sharePending) {
+        return;
+      }
+
+      event.preventDefault();
+
+      switch (action) {
+        case "share":
+          void createSharePreview();
+          break;
+        case "resetView":
+          resetView();
+          break;
+        case "fullscreen":
+          toggleFullscreen();
+          break;
+        case "settings":
+          setSettingsOpen((current) => !current);
+          break;
+        case "sidebar":
+          setSidebarOpen((current) => !current);
+          break;
+        case "displayMode":
+          setDisplayMode((current) => (current === "dark" ? "light" : "dark"));
+          break;
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [
+    closeSharePreview,
+    createSharePreview,
+    isFullscreen,
+    resetView,
+    settingsOpen,
+    sharePending,
+    sharePreview,
+    shortcutBindings,
+    shortcutRecording,
+    toggleFullscreen,
+  ]);
+
   const lastUpdatedText = updatedAt ? new Date(updatedAt).toLocaleTimeString() : "--:--:--";
 
   return (
@@ -4418,6 +4705,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 )}
                 onClick={createSharePreview}
                 disabled={sharePending}
+                title={withShortcutTitle(messages.shareImage, shortcutBindings.share)}
               >
                 <Camera className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {sharePending ? messages.generatingShareImage : messages.shareImage}
@@ -4430,6 +4718,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
                 onClick={resetView}
+                title={withShortcutTitle(messages.resetView, shortcutBindings.resetView)}
               >
                 <RotateCcw className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.resetView}
@@ -4442,6 +4731,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
                 onClick={toggleFullscreen}
+                title={withShortcutTitle(messages.enterFullscreen, shortcutBindings.fullscreen)}
               >
                 <Maximize2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.enterFullscreen}
@@ -4454,6 +4744,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
                 onClick={() => setSettingsOpen(true)}
+                title={withShortcutTitle(messages.settingsTitle, shortcutBindings.settings)}
               >
                 <Settings2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.settingsTitle}
@@ -4492,6 +4783,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 type="button"
                 onClick={() => setSidebarOpen(true)}
                 aria-label={messages.expandSidebar}
+                title={withShortcutTitle(messages.expandSidebar, shortcutBindings.sidebar)}
                 className="absolute bottom-3 left-3 z-30 inline-flex size-11 items-center justify-center rounded-full border border-slate-500/70 bg-black/50 text-white shadow-[0_10px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:bg-black/70 md:hidden"
               >
                 <Menu className="size-5" />
@@ -4705,9 +4997,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     <p>{(isMobile ? messages.tipTap : messages.tipDoubleClick).replace(/^·\s*/, "")}</p>
                     <p>{(isMobile ? messages.tipPinch : messages.tipZoom).replace(/^·\s*/, "")}</p>
                     <p>{messages.tipDrag.replace(/^·\s*/, "")}</p>
-                    <p>{messages.tipInspectorScroll.replace(/^·\s*/, "")}</p>
-                    <p>{messages.tipInspectorSort.replace(/^·\s*/, "")}</p>
-                    <p>{messages.tipFullscreen.replace(/^·\s*/, "")}</p>
+                    {!isMobile && (
+                      <>
+                        <p>{messages.tipInspectorScroll.replace(/^·\s*/, "")}</p>
+                        <p>{messages.tipInspectorSort.replace(/^·\s*/, "")}</p>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -4768,7 +5063,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   onClick={createSharePreview}
                   disabled={sharePending}
                   aria-label={sharePending ? messages.generatingShareImage : messages.shareToApps}
-                  title={messages.shareImage}
+                  title={withShortcutTitle(messages.shareImage, shortcutBindings.share)}
                   className="inline-flex items-center gap-1 rounded-[14px] bg-brand px-1.5 py-1 text-[10px] font-semibold text-brand-foreground shadow-[0_2px_8px_color-mix(in_srgb,var(--brand)_38%,transparent)] transition-all hover:bg-brand/90 hover:shadow-[0_4px_12px_color-mix(in_srgb,var(--brand)_48%,transparent)] disabled:opacity-60 sm:px-2 sm:text-[11px]"
                 >
                   <Share2 className="size-3" />
@@ -4805,6 +5100,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         displayMode={displayMode}
         themeColor={themeColor}
         priceColorMode={priceColorMode}
+        shortcutBindings={shortcutBindings}
         areaTipMessage={areaTipMessage}
         onClose={() => setSettingsOpen(false)}
         onTabChange={setSettingsTab}
@@ -4812,6 +5108,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         onDisplayModeChange={setDisplayMode}
         onThemeColorChange={setThemeColor}
         onPriceColorModeChange={setPriceColorMode}
+        onShortcutBindingsChange={setShortcutBindings}
+        onShortcutRecordingChange={setShortcutRecording}
       />
 
       {sharePreview && (
