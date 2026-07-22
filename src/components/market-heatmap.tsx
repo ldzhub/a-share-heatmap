@@ -49,6 +49,8 @@ import {
   legendGradientFromTheme,
   parseHeatThemeExport,
   parseStoredCustomHeatThemes,
+  mergeSeedHeatThemes,
+  heatThemesSeedStorageKey,
   previewGradientFromStops,
   resolveHeatTheme,
   rgbToHex,
@@ -1787,13 +1789,13 @@ function HeatThemeSettingsPanel({
   };
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-3">
       <div>
         <h3 className="text-sm font-semibold">{messages.heatThemeLabel}</h3>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.heatThemeIntro}</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{messages.heatThemeIntro}</p>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
         {availableThemes.map((theme) => {
           const active = !isEditing && heatThemeId === theme.id;
           const stops = displayMode === "light" ? theme.light : theme.dark;
@@ -1805,25 +1807,25 @@ function HeatThemeSettingsPanel({
               onClick={() => onHeatThemeIdChange(theme.id)}
               aria-pressed={active}
               className={cn(
-                "border px-3 py-2.5 text-left transition-colors",
+                "border px-2.5 py-1.5 text-left transition-colors",
                 active
                   ? "border-brand/70 bg-brand/15"
                   : "border-border bg-background/70 hover:bg-muted",
                 isEditing && "cursor-not-allowed opacity-55"
               )}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-foreground">
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="truncate text-[12px] font-semibold text-foreground">
                   {getHeatThemeDisplayName(theme, locale, messages)}
                 </span>
                 {!theme.builtin && (
-                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
                     {messages.heatThemeCustom}
                   </span>
                 )}
               </div>
               <div
-                className="mt-2 h-2.5 w-full border border-border/70"
+                className="mt-1.5 h-1.5 w-full border border-border/70"
                 style={{
                   background: previewGradientFromStops(stops, priceColorMode === "red-rise"),
                 }}
@@ -1833,13 +1835,13 @@ function HeatThemeSettingsPanel({
         })}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         {!isEditing && (
           <>
             <button
               type="button"
               onClick={startCreateCustom}
-              className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               {messages.heatThemeCreateCustom}
             </button>
@@ -1847,7 +1849,7 @@ function HeatThemeSettingsPanel({
               <button
                 type="button"
                 onClick={startEditExisting}
-                className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 {messages.heatThemeEdit}
               </button>
@@ -1855,15 +1857,15 @@ function HeatThemeSettingsPanel({
             <button
               type="button"
               onClick={handleExport}
-              className="inline-flex items-center gap-1.5 border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex items-center gap-1 border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              <Download className="size-3.5" />
+              <Download className="size-3" />
               {messages.heatThemeExport}
             </button>
             <button
               type="button"
               onClick={() => importInputRef.current?.click()}
-              className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               {messages.heatThemeImport}
             </button>
@@ -1871,7 +1873,7 @@ function HeatThemeSettingsPanel({
               <button
                 type="button"
                 onClick={handleDeleteCustom}
-                className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-muted"
+                className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-destructive transition-colors hover:bg-muted"
               >
                 {messages.heatThemeDeleteCustom}
               </button>
@@ -1888,38 +1890,38 @@ function HeatThemeSettingsPanel({
       </div>
 
       {draftTheme && editingStops && (
-        <div className="space-y-4 border border-brand/40 bg-brand/5 p-3">
-          <p className="text-xs leading-relaxed text-muted-foreground">{messages.heatThemeEditingHint}</p>
+        <div className="space-y-2.5 border border-brand/40 bg-brand/5 p-2.5">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">{messages.heatThemeEditingHint}</p>
 
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="space-y-1.5 text-xs text-muted-foreground">
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span>{messages.heatThemeNameZh}</span>
               <input
                 value={draftTheme.nameZh}
                 onChange={(event) =>
                   updateDraft((theme) => ({ ...theme, nameZh: event.target.value }))
                 }
-                className="w-full border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
+                className="w-full border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus:border-brand/60"
               />
             </label>
-            <label className="space-y-1.5 text-xs text-muted-foreground">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
               <span>{messages.heatThemeNameEn}</span>
               <input
                 value={draftTheme.nameEn}
                 onChange={(event) =>
                   updateDraft((theme) => ({ ...theme, nameEn: event.target.value }))
                 }
-                className="w-full border border-border bg-background px-2.5 py-2 text-sm text-foreground outline-none focus:border-brand/60"
+                className="w-full border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus:border-brand/60"
               />
             </label>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-1.5">
             <button
               type="button"
               onClick={() => setEditMode("dark")}
               className={cn(
-                "border px-3 py-1.5 text-xs font-semibold transition-colors",
+                "border px-2.5 py-1 text-[11px] font-semibold transition-colors",
                 editMode === "dark"
                   ? "border-brand/70 bg-brand/15 text-foreground"
                   : "border-border text-muted-foreground hover:bg-muted"
@@ -1931,7 +1933,7 @@ function HeatThemeSettingsPanel({
               type="button"
               onClick={() => setEditMode("light")}
               className={cn(
-                "border px-3 py-1.5 text-xs font-semibold transition-colors",
+                "border px-2.5 py-1 text-[11px] font-semibold transition-colors",
                 editMode === "light"
                   ? "border-brand/70 bg-brand/15 text-foreground"
                   : "border-border text-muted-foreground hover:bg-muted"
@@ -1942,25 +1944,25 @@ function HeatThemeSettingsPanel({
           </div>
 
           <div
-            className="h-2.5 w-full border border-border/70"
+            className="h-1.5 w-full border border-border/70"
             style={{
               background: previewGradientFromStops(editingStops, priceColorMode === "red-rise"),
             }}
           />
 
-          <div className="space-y-2">
+          <div className="space-y-1">
             {heatStopFields.map((field) => {
               const color = editingStops[field];
               const hex = rgbToHex(color);
               return (
                 <label
                   key={field}
-                  className="flex items-center justify-between gap-3 border border-border/80 bg-background/70 px-2.5 py-2"
+                  className="flex items-center justify-between gap-2 border border-border/80 bg-background/70 px-2 py-1"
                 >
-                  <span className="min-w-0 text-sm text-muted-foreground">
+                  <span className="min-w-0 truncate text-[12px] text-muted-foreground">
                     {getHeatStopLabel(messages, field)}
                   </span>
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-1.5">
                     <input
                       type="color"
                       value={hex}
@@ -1977,7 +1979,7 @@ function HeatThemeSettingsPanel({
                           },
                         }));
                       }}
-                      className="size-8 cursor-pointer border border-border bg-transparent p-0"
+                      className="size-6 cursor-pointer border border-border bg-transparent p-0"
                     />
                     <input
                       value={hex}
@@ -1994,7 +1996,7 @@ function HeatThemeSettingsPanel({
                           },
                         }));
                       }}
-                      className="w-[7.5rem] border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-brand/60"
+                      className="w-[6.5rem] border border-border bg-background px-1.5 py-1 font-mono text-[11px] text-foreground outline-none focus:border-brand/60"
                     />
                   </span>
                 </label>
@@ -2002,27 +2004,27 @@ function HeatThemeSettingsPanel({
             })}
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             <button
               type="button"
               onClick={handleSave}
-              className="border border-brand/70 bg-brand/20 px-3 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-brand/30"
+              className="border border-brand/70 bg-brand/20 px-2.5 py-1.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-brand/30"
             >
               {messages.heatThemeSave}
             </button>
             <button
               type="button"
               onClick={handleCancel}
-              className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               {messages.heatThemeCancel}
             </button>
             <button
               type="button"
               onClick={handleExport}
-              className="inline-flex items-center gap-1.5 border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex items-center gap-1 border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              <Download className="size-3.5" />
+              <Download className="size-3" />
               {messages.heatThemeExport}
             </button>
           </div>
@@ -2170,7 +2172,7 @@ function SettingsDrawer({
   return (
     <div className="absolute inset-0 z-[10010] flex items-end justify-center bg-black/62 backdrop-blur-sm" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0" aria-label={messages.closeSheet} onClick={onClose} />
-      <section className="relative flex h-[82dvh] w-full flex-col overflow-hidden rounded-t-lg border border-b-0 border-border bg-card text-card-foreground shadow-[0_-24px_100px_rgba(0,0,0,0.48)]">
+      <section className="relative flex h-[92dvh] w-full flex-col overflow-hidden rounded-t-lg border border-b-0 border-border bg-card text-card-foreground shadow-[0_-24px_100px_rgba(0,0,0,0.48)]">
         <div className="flex items-center justify-center pt-2">
           <span className="h-1 w-10 rounded-full bg-muted-foreground/40" aria-hidden />
         </div>
@@ -2620,6 +2622,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedShortcuts = window.localStorage.getItem(shortcutStorageKey);
       const storedHeatThemeId = window.localStorage.getItem(heatThemeStorageKey);
       const storedCustomHeatThemes = window.localStorage.getItem(customHeatThemesStorageKey);
+      const seedFlag = window.localStorage.getItem(heatThemesSeedStorageKey);
 
       if (storedLocale === "zh" || storedLocale === "en") {
         setLocale(storedLocale);
@@ -2637,7 +2640,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         setSizeMode(storedSizeMode);
       }
       setShortcutBindings(parseStoredShortcuts(storedShortcuts));
-      const customThemes = parseStoredCustomHeatThemes(storedCustomHeatThemes);
+      let customThemes = parseStoredCustomHeatThemes(storedCustomHeatThemes);
+      if (!seedFlag) {
+        customThemes = mergeSeedHeatThemes(customThemes);
+        try {
+          window.localStorage.setItem(heatThemesSeedStorageKey, "1");
+          window.localStorage.setItem(customHeatThemesStorageKey, serializeCustomHeatThemes(customThemes));
+        } catch {
+          /* Preferences are optional. */
+        }
+      }
       setCustomHeatThemes(customThemes);
       if (storedHeatThemeId) {
         setHeatThemeId(resolveHeatTheme(storedHeatThemeId, customThemes).id);

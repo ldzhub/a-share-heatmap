@@ -26,6 +26,7 @@ export type HeatThemeExportPayload = {
 
 export const heatThemeStorageKey = "heatmap-heat-theme-id";
 export const customHeatThemesStorageKey = "heatmap-heat-themes-custom";
+export const heatThemesSeedStorageKey = "heatmap-heat-themes-seeded-v1";
 
 const rgb = (r: number, g: number, b: number): HeatRgb => ({ r, g, b });
 
@@ -108,6 +109,70 @@ export const builtinHeatThemes: HeatTheme[] = [
       positiveStrong: rgb(228, 48, 42),
       negativeSoft: rgb(48, 156, 118),
       negativeStrong: rgb(20, 168, 108),
+    },
+  },
+];
+
+/** Fun starter themes: installed once, deletable like custom themes. */
+export const seedHeatThemes: HeatTheme[] = [
+  {
+    id: "seed-sunset",
+    nameZh: "日落",
+    nameEn: "Sunset",
+    builtin: false,
+    dark: {
+      flat: rgb(78, 74, 88),
+      positiveSoft: rgb(168, 86, 72),
+      positiveStrong: rgb(242, 112, 54),
+      negativeSoft: rgb(72, 78, 148),
+      negativeStrong: rgb(92, 108, 220),
+    },
+    light: {
+      flat: rgb(156, 148, 160),
+      positiveSoft: rgb(210, 118, 88),
+      positiveStrong: rgb(228, 96, 52),
+      negativeSoft: rgb(108, 118, 178),
+      negativeStrong: rgb(86, 98, 198),
+    },
+  },
+  {
+    id: "seed-aurora",
+    nameZh: "极光",
+    nameEn: "Aurora",
+    builtin: false,
+    dark: {
+      flat: rgb(70, 82, 96),
+      positiveSoft: rgb(156, 72, 132),
+      positiveStrong: rgb(232, 64, 168),
+      negativeSoft: rgb(32, 132, 138),
+      negativeStrong: rgb(28, 206, 186),
+    },
+    light: {
+      flat: rgb(148, 156, 168),
+      positiveSoft: rgb(188, 102, 156),
+      positiveStrong: rgb(208, 72, 148),
+      negativeSoft: rgb(48, 148, 152),
+      negativeStrong: rgb(24, 168, 158),
+    },
+  },
+  {
+    id: "seed-ink",
+    nameZh: "水墨",
+    nameEn: "Ink Wash",
+    builtin: false,
+    dark: {
+      flat: rgb(90, 90, 92),
+      positiveSoft: rgb(132, 78, 72),
+      positiveStrong: rgb(176, 68, 58),
+      negativeSoft: rgb(68, 102, 98),
+      negativeStrong: rgb(58, 138, 118),
+    },
+    light: {
+      flat: rgb(168, 166, 162),
+      positiveSoft: rgb(176, 120, 110),
+      positiveStrong: rgb(168, 92, 82),
+      negativeSoft: rgb(112, 140, 132),
+      negativeStrong: rgb(78, 132, 116),
     },
   },
 ];
@@ -269,6 +334,14 @@ export function parseStoredCustomHeatThemes(raw: string | null): HeatTheme[] {
   } catch {
     return [];
   }
+}
+
+export function mergeSeedHeatThemes(existing: HeatTheme[]): HeatTheme[] {
+  const existingIds = new Set(existing.map((theme) => theme.id));
+  const missing = seedHeatThemes
+    .filter((theme) => !existingIds.has(theme.id))
+    .map((theme) => cloneHeatTheme(theme));
+  return missing.length === 0 ? existing : [...missing, ...existing];
 }
 
 export function serializeCustomHeatThemes(themes: HeatTheme[]) {
