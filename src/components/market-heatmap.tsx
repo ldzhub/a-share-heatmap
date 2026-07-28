@@ -79,6 +79,8 @@ import {
 } from "@/lib/heatmap-shortcuts";
 import {
   heatmapPeriodKeys,
+  isHeatmapPeriodKey,
+  isMarketKey,
   type HeatmapPeriodKey,
   type MarketKey,
   type MarketOverviewResponse,
@@ -185,12 +187,16 @@ type SettingsTab = "appearance" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
 const refreshIntervalMs = 8000;
-const marketOptions: MarketKey[] = ["all", "sse", "szse", "hs300", "zza500", "cyb", "kcb"];
+const marketOptions: MarketKey[] = ["all", "sse", "szse", "hs300", "zza50", "zza500", "cyb", "kcb"];
 const periodOptions: HeatmapPeriodKey[] = [...heatmapPeriodKeys];
 const allBoardsValue = "__all__";
 const allTrendsValue = "__all__";
 const risingOnlyValue = "__rising__";
 const fallingOnlyValue = "__falling__";
+const marketStorageKey = "heatmap-market";
+const periodStorageKey = "heatmap-period";
+const boardFilterStorageKey = "heatmap-board-filter";
+const trendFilterStorageKey = "heatmap-trend-filter";
 const colorLegendSteps = [-4, -3, -2, -1, 0, 1, 2, 3, 4] as const;
 const legendTicks = [-4, -2, 0, 2, 4] as const;
 const minZoom = 1;
@@ -717,6 +723,7 @@ function getMarketLabel(messages: HeatmapMessages, market: MarketKey) {
   if (market === "sse") return messages.markets.sse;
   if (market === "szse") return messages.markets.szse;
   if (market === "hs300") return messages.markets.hs300;
+  if (market === "zza50") return messages.markets.zza50;
   if (market === "zza500") return messages.markets.zza500;
   if (market === "cyb") return messages.markets.cyb;
   return messages.markets.kcb;
@@ -728,6 +735,7 @@ function getCompactMarketLabel(messages: HeatmapMessages, market: MarketKey, loc
     if (market === "sse") return "Shanghai";
     if (market === "szse") return "Shenzhen";
     if (market === "hs300") return "CSI 300";
+    if (market === "zza50") return "CSI A50";
     if (market === "zza500") return "CSI A500";
     if (market === "cyb") return "ChiNext";
     return "STAR";
@@ -2697,6 +2705,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedTheme = window.localStorage.getItem("heatmap-theme-color");
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
       const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
+      const storedMarket = window.sessionStorage.getItem(marketStorageKey);
+      const storedPeriod = window.sessionStorage.getItem(periodStorageKey);
+      const storedBoardFilter = window.sessionStorage.getItem(boardFilterStorageKey);
+      const storedTrendFilter = window.sessionStorage.getItem(trendFilterStorageKey);
       const storedShortcuts = window.localStorage.getItem(shortcutStorageKey);
       const storedHeatThemeId = window.localStorage.getItem(heatThemeStorageKey);
       const storedCustomHeatThemes = window.localStorage.getItem(customHeatThemesStorageKey);
@@ -2716,6 +2728,22 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
       if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
         setSizeMode(storedSizeMode);
+      }
+      if (storedMarket && isMarketKey(storedMarket)) {
+        setMarket(storedMarket);
+      }
+      if (storedPeriod && isHeatmapPeriodKey(storedPeriod)) {
+        setPeriod(storedPeriod);
+      }
+      if (storedBoardFilter) {
+        setBoardFilter(storedBoardFilter);
+      }
+      if (
+        storedTrendFilter === allTrendsValue ||
+        storedTrendFilter === risingOnlyValue ||
+        storedTrendFilter === fallingOnlyValue
+      ) {
+        setTrendFilter(storedTrendFilter);
       }
       setShortcutBindings(parseStoredShortcuts(storedShortcuts));
       let customThemes = parseStoredCustomHeatThemes(storedCustomHeatThemes);
@@ -2805,6 +2833,50 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       return;
     }
     try {
+      window.sessionStorage.setItem(marketStorageKey, market);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [market, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(periodStorageKey, period);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [period, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(boardFilterStorageKey, boardFilter);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [boardFilter, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(trendFilterStorageKey, trendFilter);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, trendFilter]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
       window.localStorage.setItem(shortcutStorageKey, serializeShortcuts(shortcutBindings));
     } catch {
       /* Preferences are optional. */
@@ -2827,7 +2899,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     () => (sizeMode === "turnover" ? messages.tipAreaTurnover : messages.tipAreaMarketCap),
     [messages.tipAreaMarketCap, messages.tipAreaTurnover, sizeMode]
   );
-
   const refreshSize = useCallback(() => {
     const target = viewportRef.current;
     if (!target) {
@@ -3251,7 +3322,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
 
       const subBoards = groupStocksBySubBoard(boardBox.item.children, quotes);
-      const shouldNestSubBoards = subBoards.length > 1;
+      const shouldNestSubBoards = market !== "zza50" && subBoards.length > 1;
 
       if (!shouldNestSubBoards) {
         const stockBoxes = binaryTreemap(
@@ -3270,7 +3341,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
             code: stockBox.item.code,
             name: stockBox.item.name,
             boardName: boardBox.item.name,
-            subBoardName: stockBox.item.subBoardName,
+            subBoardName: market === "zza50" ? boardBox.item.name : stockBox.item.subBoardName,
             value: stockBox.item.value,
             x: stockBox.x,
             y: stockBox.y,
@@ -3350,7 +3421,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     return { stockRects, boardRects, subBoardRects };
-  }, [canvasSize.height, canvasSize.width, quotes, sizedTreemapData]);
+  }, [canvasSize.height, canvasSize.width, market, quotes, sizedTreemapData]);
 
   useEffect(() => {
     lastStockRectsRef.current = layout.stockRects;

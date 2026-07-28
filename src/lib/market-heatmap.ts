@@ -1,7 +1,12 @@
 import fallbackMarketSnapshot from "@/lib/data/market-heatmap-fallback.json";
 import subboardSnapshot from "@/lib/data/market-heatmap-subboards.json";
+import {
+  getZza50ConstituentSnapshot,
+  getZza50ConstituentStatus,
+  type Zza50ConstituentStatus,
+} from "@/lib/market-constituents";
 
-export const marketKeys = ["all", "sse", "szse", "hs300", "zza500", "cyb", "kcb"] as const;
+export const marketKeys = ["all", "sse", "szse", "hs300", "zza50", "zza500", "cyb", "kcb"] as const;
 
 export type MarketKey = (typeof marketKeys)[number];
 
@@ -175,6 +180,7 @@ const marketIndexSymbols: Record<MarketKey, string> = {
   sse: "sh000001", // 上证指数：更符合用户查看“上证”大盘涨跌时的通用口径。
   szse: "sz399107", // 深证 A 指
   hs300: "sh000300",
+  zza50: "zz930050", // 中证 A50：采用中证指数口径，聚焦各行业龙头。
   zza500: "sh000510",
   cyb: "sz399006",
   kcb: "sh000680", // 科创综指，比科创 50 更贴近“科创板”整体口径。
@@ -185,6 +191,7 @@ const marketIndexSecids: Record<MarketKey, string> = {
   sse: "1.000001",
   szse: "0.399107",
   hs300: "1.000300",
+  zza50: "2.930050",
   zza500: "1.000510",
   cyb: "0.399006",
   kcb: "1.000680",
@@ -399,13 +406,20 @@ function buildDynamicIndexSets(stocks: StockSnapshot[]) {
     (left, right) => (right.floatMarketCap || right.totalMarketCap) - (left.floatMarketCap || left.totalMarketCap)
   );
 
+  const zza50FallbackSet = new Set(sortedByCap.slice(0, 50).map((stock) => stock.code));
   const hs300Set = new Set(sortedByCap.slice(0, 300).map((stock) => stock.code));
   const zza500Set = new Set(sortedByCap.slice(0, 500).map((stock) => stock.code));
 
-  return { hs300Set, zza500Set };
+  return { zza50FallbackSet, hs300Set, zza500Set };
 }
 
-function inMarket(stock: StockSnapshot, market: MarketKey, hs300Set: Set<string>, zza500Set: Set<string>) {
+function inMarket(
+  stock: StockSnapshot,
+  market: MarketKey,
+  zza50Set: Set<string>,
+  hs300Set: Set<string>,
+  zza500Set: Set<string>
+) {
   if (market === "all") {
     return true;
   }
@@ -430,30 +444,65 @@ function inMarket(stock: StockSnapshot, market: MarketKey, hs300Set: Set<string>
     return hs300Set.has(stock.code);
   }
 
+  if (market === "zza50") {
+    return zza50Set.has(stock.code);
+  }
+
   return zza500Set.has(stock.code);
 }
 
 // `baselineStocks` is module-level immutable, so derived index sets and per-market
 // filtered slices can be precomputed once instead of on every request.
-const { hs300Set: baselineHs300Set, zza500Set: baselineZza500Set } = buildDynamicIndexSets(baselineStocks);
-const stocksByMarket: Record<MarketKey, StockSnapshot[]> = {
+const {
+  zza50FallbackSet: baselineZza50FallbackSet,
+  hs300Set: baselineHs300Set,
+  zza500Set: baselineZza500Set,
+} = buildDynamicIndexSets(baselineStocks);
+const baselineStockCodeSet = new Set(baselineStocks.map((stock) => stock.code));
+const staticStocksByMarket: Record<Exclude<MarketKey, "zza50">, StockSnapshot[]> = {
   all: baselineStocks,
-  sse: baselineStocks.filter((stock) => inMarket(stock, "sse", baselineHs300Set, baselineZza500Set)),
-  szse: baselineStocks.filter((stock) => inMarket(stock, "szse", baselineHs300Set, baselineZza500Set)),
-  hs300: baselineStocks.filter((stock) => inMarket(stock, "hs300", baselineHs300Set, baselineZza500Set)),
-  zza500: baselineStocks.filter((stock) => inMarket(stock, "zza500", baselineHs300Set, baselineZza500Set)),
-  cyb: baselineStocks.filter((stock) => inMarket(stock, "cyb", baselineHs300Set, baselineZza500Set)),
-  kcb: baselineStocks.filter((stock) => inMarket(stock, "kcb", baselineHs300Set, baselineZza500Set)),
+  sse: baselineStocks.filter((stock) =>
+    inMarket(stock, "sse", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
+  szse: baselineStocks.filter((stock) =>
+    inMarket(stock, "szse", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
+  hs300: baselineStocks.filter((stock) =>
+    inMarket(stock, "hs300", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
+  zza500: baselineStocks.filter((stock) =>
+    inMarket(stock, "zza500", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
+  cyb: baselineStocks.filter((stock) =>
+    inMarket(stock, "cyb", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
+  kcb: baselineStocks.filter((stock) =>
+    inMarket(stock, "kcb", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
 };
 
-function filterStocks(stocks: StockSnapshot[], market: MarketKey) {
-  // Fast path: when filtering the baseline universe, use the precomputed slice.
-  if (stocks === baselineStocks) {
-    return stocksByMarket[market];
+async function getZza50Set(stocks: StockSnapshot[], fallbackSet: Set<string>) {
+  const allowedCodes = new Set(stocks.map((stock) => stock.code));
+  const snapshot = await getZza50ConstituentSnapshot({
+    allowedCodes: stocks === baselineStocks ? baselineStockCodeSet : allowedCodes,
+  });
+
+  if (snapshot.count > 0) {
+    return new Set(snapshot.codes);
   }
 
-  const { hs300Set, zza500Set } = buildDynamicIndexSets(stocks);
-  return stocks.filter((stock) => inMarket(stock, market, hs300Set, zza500Set));
+  return fallbackSet;
+}
+
+async function filterStocks(stocks: StockSnapshot[], market: MarketKey) {
+  if (market !== "zza50" && stocks === baselineStocks) {
+    return staticStocksByMarket[market];
+  }
+
+  const { zza50FallbackSet, hs300Set, zza500Set } = buildDynamicIndexSets(stocks);
+  const zza50Set = market === "zza50" ? await getZza50Set(stocks, zza50FallbackSet) : zza50FallbackSet;
+
+  return stocks.filter((stock) => inMarket(stock, market, zza50Set, hs300Set, zza500Set));
 }
 
 function toBoardCode(name: string) {
@@ -1351,13 +1400,13 @@ function getFallbackSnapshot() {
   }));
 }
 
-function getFallbackTreemapData(
+async function getFallbackTreemapData(
   market: MarketKey,
   period: HeatmapPeriodKey,
   indexChangePct?: number
-): TreemapResponse {
+): Promise<TreemapResponse> {
   const snapshot = getFallbackSnapshot();
-  const marketStocks = filterStocks(snapshot, market);
+  const marketStocks = await filterStocks(snapshot, market);
   const nodes = buildNodesFromStocks(marketStocks, {}, period);
   const fallbackIndexChangePct = weightedChangePct(marketStocks, {}, period);
 
@@ -1376,13 +1425,13 @@ function getFallbackTreemapData(
   };
 }
 
-function getFallbackQuoteData(
+async function getFallbackQuoteData(
   market: MarketKey,
   period: HeatmapPeriodKey,
   metric?: MetricKey
-): QuotesResponse {
+): Promise<QuotesResponse> {
   const snapshot = getFallbackSnapshot();
-  const marketStocks = filterStocks(snapshot, market);
+  const marketStocks = await filterStocks(snapshot, market);
   const quotes: Record<string, QuoteValue> = {};
 
   for (const stock of marketStocks) {
@@ -1415,6 +1464,20 @@ export function isHeatmapPeriodKey(value: string): value is HeatmapPeriodKey {
   return heatmapPeriodKeys.includes(value as HeatmapPeriodKey);
 }
 
+export async function getMarketConstituentStatus(options?: {
+  market?: MarketKey;
+  forceRefresh?: boolean;
+}): Promise<Zza50ConstituentStatus | null> {
+  if ((options?.market ?? "zza50") !== "zza50") {
+    return null;
+  }
+
+  return getZza50ConstituentStatus({
+    forceRefresh: options?.forceRefresh,
+    allowedCodes: baselineStockCodeSet,
+  });
+}
+
 export async function getTreemapData(
   market: MarketKey,
   period: HeatmapPeriodKey = "day"
@@ -1441,7 +1504,7 @@ export async function getTreemapData(
 
   hasLoggedFallbackWarning = false;
 
-  const marketStocks = filterStocks(baselineStocks, market);
+  const marketStocks = await filterStocks(baselineStocks, market);
   const nodes = buildNodesFromStocks(marketStocks, quoteResult.value.quotes, period);
   const computedSummary = summarizeStocks(marketStocks, quoteResult.value.quotes, period);
   const computedIndexChangePct = weightedChangePct(marketStocks, quoteResult.value.quotes, period);
@@ -1495,7 +1558,7 @@ export async function getQuoteData(
 
   hasLoggedFallbackWarning = false;
 
-  const marketStocks = filterStocks(baselineStocks, market);
+  const marketStocks = await filterStocks(baselineStocks, market);
   const quotes: Record<string, QuoteValue> = {};
 
   for (const stock of marketStocks) {
@@ -1533,16 +1596,18 @@ export async function getOverviewData(
       hasLoggedFallbackWarning = true;
     }
 
-    const fallbackMarkets: MarketOverviewItem[] = marketKeys.map((market) => {
-      const stocks = stocksByMarket[market];
-      const changePct = weightedChangePct(stocks, {}, period);
-      return {
-        market,
-        changePct: Number.isFinite(changePct) ? changePct : 0,
-        stockCount: stocks.length,
-        updatedAt: fallbackSnapshotSeed.updatedAt,
-      };
-    });
+    const fallbackMarkets: MarketOverviewItem[] = await Promise.all(
+      marketKeys.map(async (market) => {
+        const stocks = await filterStocks(baselineStocks, market);
+        const changePct = weightedChangePct(stocks, {}, period);
+        return {
+          market,
+          changePct: Number.isFinite(changePct) ? changePct : 0,
+          stockCount: stocks.length,
+          updatedAt: fallbackSnapshotSeed.updatedAt,
+        };
+      })
+    );
 
     return {
       period,
@@ -1557,21 +1622,23 @@ export async function getOverviewData(
   const liveQuotes = quoteResult.value.quotes;
   const indexSummaries = indexResult.status === "fulfilled" ? indexResult.value.summaries : null;
 
-  const markets: MarketOverviewItem[] = marketKeys.map((market) => {
-    const stocks = stocksByMarket[market];
-    const remoteIndex = indexSummaries?.[market];
-    const remoteIndexChange = getChangeForPeriod(remoteIndex?.changes, period, Number.NaN);
-    const changePct = Number.isFinite(remoteIndexChange)
-      ? remoteIndexChange
-      : weightedChangePct(stocks, liveQuotes, period);
+  const markets: MarketOverviewItem[] = await Promise.all(
+    marketKeys.map(async (market) => {
+      const stocks = await filterStocks(baselineStocks, market);
+      const remoteIndex = indexSummaries?.[market];
+      const remoteIndexChange = getChangeForPeriod(remoteIndex?.changes, period, Number.NaN);
+      const changePct = Number.isFinite(remoteIndexChange)
+        ? remoteIndexChange
+        : weightedChangePct(stocks, liveQuotes, period);
 
-    return {
-      market,
-      changePct: Number.isFinite(changePct) ? changePct : 0,
-      stockCount: stocks.length,
-      updatedAt: quoteResult.value.updatedAt,
-    };
-  });
+      return {
+        market,
+        changePct: Number.isFinite(changePct) ? changePct : 0,
+        stockCount: stocks.length,
+        updatedAt: quoteResult.value.updatedAt,
+      };
+    })
+  );
 
   return {
     period,
