@@ -3048,6 +3048,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   }, []);
 
   useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+
     let cancelled = false;
 
     async function loadTreemap() {
@@ -3079,27 +3083,33 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     return () => {
       cancelled = true;
     };
-  }, [fetchTreemap, market, messages.errorLoad, period]);
+  }, [fetchTreemap, market, messages.errorLoad, period, preferencesReady]);
 
   usePollWhileVisible(
     useCallback(async () => {
+      if (!preferencesReady) {
+        return;
+      }
       try {
         await fetchQuotes(market, period);
       } catch {
         setError(messages.errorLoad);
       }
-    }, [fetchQuotes, market, messages.errorLoad, period]),
+    }, [fetchQuotes, market, messages.errorLoad, period, preferencesReady]),
     refreshIntervalMs
   );
 
   usePollWhileVisible(
     useCallback(async () => {
+      if (!preferencesReady) {
+        return;
+      }
       try {
         await fetchMarketSummaries(period);
       } catch {
         // Keep existing summaries if the refresh fails.
       }
-    }, [fetchMarketSummaries, period]),
+    }, [fetchMarketSummaries, period, preferencesReady]),
     refreshIntervalMs
   );
 
