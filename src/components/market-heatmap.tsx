@@ -16,9 +16,12 @@ import {
   Download,
   ExternalLink,
   Info,
+  Keyboard,
   Loader2,
+  Mail,
   Menu,
   Maximize2,
+  Megaphone,
   Minimize2,
   Moon,
   Palette,
@@ -36,7 +39,48 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getMessages, type HeatmapMessages, type Locale } from "@/lib/i18n";
 import {
+  boardHeaderColorFromTheme,
+  buildHeatThemeExport,
+  builtinHeatThemes,
+  cloneHeatTheme,
+  createCustomHeatTheme,
+  customHeatThemesStorageKey,
+  defaultHeatThemeId,
+  heatStopFields,
+  heatThemeStorageKey,
+  legendGradientFromTheme,
+  parseHeatThemeExport,
+  parseStoredCustomHeatThemes,
+  mergeSeedHeatThemes,
+  heatThemesSeedStorageKey,
+  previewGradientFromStops,
+  resolveHeatTheme,
+  rgbToHex,
+  serializeCustomHeatThemes,
+  parseHexColor,
+  heatColorFromTheme,
+  uiChangeTextColor,
+  uiPolarityColor,
+  type HeatStopField,
+  type HeatTheme,
+} from "@/lib/heatmap-themes";
+import {
+  defaultShortcutBindings,
+  formatShortcutKey,
+  formatShortcutLabel,
+  parseStoredShortcuts,
+  resolveShortcutAction,
+  serializeShortcuts,
+  shortcutActionIds,
+  shortcutStorageKey,
+  withReboundShortcut,
+  type ShortcutActionId,
+  type ShortcutBindings,
+} from "@/lib/heatmap-shortcuts";
+import {
   heatmapPeriodKeys,
+  isHeatmapPeriodKey,
+  isMarketKey,
   type HeatmapPeriodKey,
   type MarketKey,
   type MarketOverviewResponse,
@@ -139,22 +183,28 @@ type ScreenshotPreview = {
 type PriceColorMode = "red-rise" | "green-rise";
 type ThemeColorKey = "green" | "red" | "blue" | "violet";
 type DisplayMode = "dark" | "light";
-type SettingsTab = "appearance" | "help" | "project";
+type SettingsTab = "appearance" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
 const refreshIntervalMs = 8000;
-const marketOptions: MarketKey[] = ["all", "sse", "szse", "hs300", "zza500", "cyb", "kcb"];
+const marketOptions: MarketKey[] = ["all", "sse", "szse", "hs300", "zza50", "zza500", "cyb", "kcb"];
 const periodOptions: HeatmapPeriodKey[] = [...heatmapPeriodKeys];
 const allBoardsValue = "__all__";
 const allTrendsValue = "__all__";
 const risingOnlyValue = "__rising__";
 const fallingOnlyValue = "__falling__";
+const marketStorageKey = "heatmap-market";
+const periodStorageKey = "heatmap-period";
+const boardFilterStorageKey = "heatmap-board-filter";
+const trendFilterStorageKey = "heatmap-trend-filter";
 const colorLegendSteps = [-4, -3, -2, -1, 0, 1, 2, 3, 4] as const;
 const legendTicks = [-4, -2, 0, 2, 4] as const;
 const minZoom = 1;
 const maxZoom = 3;
 const flatThreshold = 0.1;
 const githubProjectUrl = "https://github.com/wenyuanw/a-share-heatmap";
+const authorEmail = "hi@wenyuanw.me";
+const authorMailto = `mailto:${authorEmail}`;
 
 const themeColors: Record<
   ThemeColorKey,
@@ -177,10 +227,13 @@ const heatmapCanvasThemes: Record<
     boardFill: string;
     subBoardFill: string;
     subBoardBorder: string;
+    activeSubBoardStroke: string;
     activeSubBoardInner: string;
     boardBorder: string;
+    activeBoardStroke: string;
     highlightOuter: string;
     highlightInner: string;
+    chrome: string;
   }
 > = {
   dark: {
@@ -189,21 +242,27 @@ const heatmapCanvasThemes: Record<
     boardFill: "#20252d",
     subBoardFill: "rgba(18, 23, 31, 0.62)",
     subBoardBorder: "rgba(148, 163, 184, 0.3)",
+    activeSubBoardStroke: "#5eead4",
     activeSubBoardInner: "rgba(8, 47, 73, 0.92)",
     boardBorder: "rgba(148, 163, 184, 0.48)",
+    activeBoardStroke: "#f6d36d",
     highlightOuter: "rgba(2, 6, 23, 0.92)",
     highlightInner: "#f8fafc",
+    chrome: "#10141b",
   },
   light: {
-    backgroundStart: "#f8fafc",
-    backgroundEnd: "#e9eef5",
-    boardFill: "#eef2f7",
-    subBoardFill: "rgba(255, 255, 255, 0.72)",
-    subBoardBorder: "rgba(100, 116, 139, 0.32)",
-    activeSubBoardInner: "rgba(14, 116, 144, 0.42)",
-    boardBorder: "rgba(100, 116, 139, 0.42)",
-    highlightOuter: "rgba(15, 23, 42, 0.82)",
+    backgroundStart: "#f6f8fb",
+    backgroundEnd: "#e8eef6",
+    boardFill: "#d8e0eb",
+    subBoardFill: "rgba(255, 255, 255, 0.82)",
+    subBoardBorder: "rgba(100, 116, 139, 0.26)",
+    activeSubBoardStroke: "#0f766e",
+    activeSubBoardInner: "rgba(15, 118, 110, 0.28)",
+    boardBorder: "rgba(71, 85, 105, 0.34)",
+    activeBoardStroke: "#b45309",
+    highlightOuter: "rgba(15, 23, 42, 0.42)",
     highlightInner: "#ffffff",
+    chrome: "#e8eef6",
   },
 };
 
@@ -646,11 +705,25 @@ function formatShareTimestamp(value: string) {
   }).format(date);
 }
 
+function getShortcutActionLabel(messages: HeatmapMessages, action: ShortcutActionId) {
+  if (action === "share") return messages.shortcutActionShare;
+  if (action === "resetView") return messages.shortcutActionResetView;
+  if (action === "fullscreen") return messages.shortcutActionFullscreen;
+  if (action === "settings") return messages.shortcutActionSettings;
+  if (action === "sidebar") return messages.shortcutActionSidebar;
+  return messages.shortcutActionDisplayMode;
+}
+
+function withShortcutTitle(label: string, key: string) {
+  return `${label} (${formatShortcutLabel(key)})`;
+}
+
 function getMarketLabel(messages: HeatmapMessages, market: MarketKey) {
   if (market === "all") return messages.markets.all;
   if (market === "sse") return messages.markets.sse;
   if (market === "szse") return messages.markets.szse;
   if (market === "hs300") return messages.markets.hs300;
+  if (market === "zza50") return messages.markets.zza50;
   if (market === "zza500") return messages.markets.zza500;
   if (market === "cyb") return messages.markets.cyb;
   return messages.markets.kcb;
@@ -662,6 +735,7 @@ function getCompactMarketLabel(messages: HeatmapMessages, market: MarketKey, loc
     if (market === "sse") return "Shanghai";
     if (market === "szse") return "Shenzhen";
     if (market === "hs300") return "CSI 300";
+    if (market === "zza50") return "CSI A50";
     if (market === "zza500") return "CSI A500";
     if (market === "cyb") return "ChiNext";
     return "STAR";
@@ -691,86 +765,44 @@ function getCompactPeriodLabel(period: HeatmapPeriodKey, locale: Locale) {
   return "年";
 }
 
-function getHeatColor(changePct: number, colorMode: PriceColorMode) {
-  const limit = 10;
-  const neutral = "rgb(72, 79, 92)";
-  const amplitude = clamp(Math.abs(changePct) / limit, 0, 1);
-
-  if (Math.abs(changePct) < 0.1) {
-    return neutral;
-  }
-
-  const isRise = changePct > 0;
-  const shouldUseRed = colorMode === "red-rise" ? isRise : !isRise;
-
-  if (shouldUseRed) {
-    const red = Math.round(140 + amplitude * 115);
-    const green = Math.round(72 - amplitude * 42);
-    const blue = Math.round(76 - amplitude * 38);
-    return `rgb(${red}, ${green}, ${blue})`;
-  }
-
-  const red = Math.round(40 - amplitude * 14);
-  const green = Math.round(126 + amplitude * 88);
-  const blue = Math.round(76 - amplitude * 10);
-  return `rgb(${red}, ${green}, ${blue})`;
+function getHeatColor(
+  theme: HeatTheme,
+  changePct: number,
+  colorMode: PriceColorMode,
+  displayMode: DisplayMode = "dark"
+) {
+  return heatColorFromTheme(theme, changePct, colorMode === "red-rise", displayMode);
 }
 
-function getLegendGradient(colorMode: PriceColorMode) {
-  return `linear-gradient(to right, ${colorLegendSteps
-    .map((step, index) => {
-      const position = (index / (colorLegendSteps.length - 1)) * 100;
-      return `${getHeatColor(step, colorMode)} ${position.toFixed(2)}%`;
-    })
-    .join(", ")})`;
+function getLegendGradient(theme: HeatTheme, colorMode: PriceColorMode, displayMode: DisplayMode = "dark") {
+  return legendGradientFromTheme(theme, colorMode === "red-rise", displayMode, colorLegendSteps);
 }
 
-function getBoardHeaderColor(changePct: number, colorMode: PriceColorMode) {
-  const amplitude = clamp(Math.abs(changePct) / 10, 0, 1);
-
-  if (Math.abs(changePct) < 0.1) {
-    return "rgb(51, 58, 70)";
-  }
-
-  const isRise = changePct > 0;
-  const shouldUseRed = colorMode === "red-rise" ? isRise : !isRise;
-
-  if (shouldUseRed) {
-    return `rgb(${Math.round(120 + amplitude * 60)}, ${Math.round(58 - amplitude * 12)}, ${Math.round(
-      66 - amplitude * 10
-    )})`;
-  }
-
-  return `rgb(${Math.round(46 - amplitude * 10)}, ${Math.round(102 + amplitude * 36)}, ${Math.round(
-    70 - amplitude * 6
-  )})`;
+function getBoardHeaderColor(
+  theme: HeatTheme,
+  changePct: number,
+  colorMode: PriceColorMode,
+  displayMode: DisplayMode = "dark"
+) {
+  return boardHeaderColorFromTheme(theme, changePct, colorMode === "red-rise", displayMode);
 }
 
-function getChangeTextClass(changePct: number, colorMode: PriceColorMode, tone: "normal" | "soft" | "strong" = "normal") {
-  if (Math.abs(changePct) < 0.1) {
-    return tone === "strong" ? "text-slate-500" : "text-muted-foreground";
-  }
-
-  const isRise = changePct > 0;
-  const shouldUseRed = colorMode === "red-rise" ? isRise : !isRise;
-
-  if (shouldUseRed) {
-    if (tone === "soft") return "text-red-100";
-    if (tone === "strong") return "text-red-500";
-    return "text-red-400";
-  }
-
-  if (tone === "soft") return "text-emerald-100";
-  if (tone === "strong") return "text-emerald-600";
-  return "text-emerald-400";
+function getChangeTextColor(
+  theme: HeatTheme,
+  changePct: number,
+  colorMode: PriceColorMode,
+  displayMode: DisplayMode,
+  tone: "normal" | "soft" | "strong" = "normal"
+) {
+  return uiChangeTextColor(theme, changePct, colorMode === "red-rise", displayMode, tone);
 }
 
-function getRiseTextClass(colorMode: PriceColorMode) {
-  return colorMode === "red-rise" ? "text-red-400" : "text-emerald-400";
+function getRiseTextColor(theme: HeatTheme, colorMode: PriceColorMode, displayMode: DisplayMode) {
+  return uiPolarityColor(theme, "rise", colorMode === "red-rise", displayMode, "normal");
 }
 
-function getFallTextClass(colorMode: PriceColorMode) {
-  return colorMode === "red-rise" ? "text-emerald-400" : "text-red-400";
+function getFallTextColor(theme: HeatTheme, colorMode: PriceColorMode, displayMode: DisplayMode) {
+  return uiPolarityColor(theme, "fall", colorMode === "red-rise", displayMode, "normal");
 }
 
 function weightedAverageChange(
@@ -1327,6 +1359,8 @@ function MobileStockSheet({
   stocks,
   messages,
   priceColorMode,
+  heatTheme,
+  displayMode,
   sortKey,
   onSortChange,
   onClose,
@@ -1338,6 +1372,8 @@ function MobileStockSheet({
   stocks: MobileStockSheetStock[];
   messages: HeatmapMessages;
   priceColorMode: PriceColorMode;
+  heatTheme: HeatTheme;
+  displayMode: DisplayMode;
   sortKey: InspectorSortKey;
   onSortChange: (next: InspectorSortKey) => void;
   onClose: () => void;
@@ -1368,10 +1404,10 @@ function MobileStockSheet({
                 <div className="mt-1 flex items-baseline gap-3 tabular-nums">
                   <span className="text-[20px] font-semibold text-white">{formatPrice(stock.price)}</span>
                   <span
-                    className={cn(
-                      "text-[15px] font-semibold",
-                      getChangeTextClass(stock.changePct, priceColorMode)
-                    )}
+                    className="text-[15px] font-semibold"
+                    style={{
+                      color: getChangeTextColor(heatTheme, stock.changePct, priceColorMode, displayMode),
+                    }}
                   >
                     {formatChange(stock.changePct)}
                   </span>
@@ -1447,10 +1483,10 @@ function MobileStockSheet({
                     {formatPrice(stock.price)}
                   </span>
                   <span
-                    className={cn(
-                      "w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums",
-                      getChangeTextClass(stock.changePct, priceColorMode)
-                    )}
+                    className="w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums"
+                    style={{
+                      color: getChangeTextColor(heatTheme, stock.changePct, priceColorMode, displayMode),
+                    }}
                   >
                     {formatChange(stock.changePct)}
                   </span>
@@ -1478,10 +1514,10 @@ function MobileStockSheet({
                       {formatPrice(item.price)}
                     </span>
                     <span
-                      className={cn(
-                        "w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums",
-                        getChangeTextClass(item.changePct, priceColorMode)
-                      )}
+                      className="w-16 shrink-0 text-right text-[12px] font-semibold tabular-nums"
+                      style={{
+                        color: getChangeTextColor(heatTheme, item.changePct, priceColorMode, displayMode),
+                      }}
                     >
                       {formatChange(item.changePct)}
                     </span>
@@ -1560,7 +1596,7 @@ function HeatmapLoadingOverlay({ displayMode, messages }: { displayMode: Display
       aria-busy="true"
       className={cn(
         "absolute inset-0 z-40 flex flex-col items-center justify-center gap-6 px-4 py-8 text-center backdrop-blur-[10px]",
-        isLightMode ? "bg-slate-50/92" : "bg-[#0a0d12]/92"
+        isLightMode ? "bg-[#f3f6fa]/94" : "bg-[#0a0d12]/92"
       )}
     >
       <div className="pointer-events-none w-full max-w-[min(92vw,420px)] select-none">
@@ -1579,7 +1615,7 @@ function HeatmapLoadingOverlay({ displayMode, messages }: { displayMode: Display
         <div
           className={cn(
             "grid h-[min(34vh,260px)] grid-cols-6 grid-rows-4 gap-1.5 rounded-md border p-2 shadow-[0_24px_80px_rgba(0,0,0,0.18)]",
-            isLightMode ? "border-slate-200 bg-white/88" : "border-white/[0.07] bg-[#10141b]/90"
+            isLightMode ? "border-slate-200/90 bg-white/92 shadow-[0_16px_48px_rgba(15,23,42,0.08)]" : "border-white/[0.07] bg-[#10141b]/90"
           )}
         >
           {heatmapLoadingBlocks.map((block, index) => (
@@ -1615,6 +1651,401 @@ function HeatmapLoadingOverlay({ displayMode, messages }: { displayMode: Display
   );
 }
 
+function getHeatThemeDisplayName(theme: HeatTheme, locale: Locale, messages: HeatmapMessages) {
+  if (theme.builtin) {
+    if (theme.id === "soft") return messages.heatThemeSoft;
+    if (theme.id === "classic") return messages.heatThemeClassic;
+    if (theme.id === "muted") return messages.heatThemeMuted;
+    if (theme.id === "high-contrast") return messages.heatThemeHighContrast;
+  }
+  return locale === "en" ? theme.nameEn : theme.nameZh;
+}
+
+function getHeatStopLabel(messages: HeatmapMessages, field: HeatStopField) {
+  if (field === "flat") return messages.heatStopFlat;
+  if (field === "positiveSoft") return messages.heatStopPositiveSoft;
+  if (field === "positiveStrong") return messages.heatStopPositiveStrong;
+  if (field === "negativeSoft") return messages.heatStopNegativeSoft;
+  return messages.heatStopNegativeStrong;
+}
+
+function HeatThemeSettingsPanel({
+  messages,
+  locale,
+  displayMode,
+  priceColorMode,
+  heatThemeId,
+  customHeatThemes,
+  activeHeatTheme,
+  onHeatThemeIdChange,
+  onCustomHeatThemesChange,
+}: {
+  messages: HeatmapMessages;
+  locale: Locale;
+  displayMode: DisplayMode;
+  priceColorMode: PriceColorMode;
+  heatThemeId: string;
+  customHeatThemes: HeatTheme[];
+  activeHeatTheme: HeatTheme;
+  onHeatThemeIdChange: (id: string) => void;
+  onCustomHeatThemesChange: (themes: HeatTheme[]) => void;
+}) {
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [draftTheme, setDraftTheme] = useState<HeatTheme | null>(null);
+  const [editMode, setEditMode] = useState<"dark" | "light">(displayMode);
+  const availableThemes = useMemo(
+    () => [...builtinHeatThemes, ...customHeatThemes],
+    [customHeatThemes]
+  );
+  const isEditing = Boolean(draftTheme);
+  const editingStops = draftTheme
+    ? editMode === "light"
+      ? draftTheme.light
+      : draftTheme.dark
+    : null;
+
+  useEffect(() => {
+    setEditMode(displayMode);
+  }, [displayMode]);
+
+  useEffect(() => {
+    setDraftTheme(null);
+  }, [heatThemeId]);
+
+  const startEditExisting = () => {
+    if (activeHeatTheme.builtin) {
+      return;
+    }
+    setDraftTheme(cloneHeatTheme(activeHeatTheme));
+    setEditMode(displayMode);
+  };
+
+  const startCreateCustom = () => {
+    const next = createCustomHeatTheme(
+      activeHeatTheme,
+      locale === "zh" ? `自定义 ${customHeatThemes.length + 1}` : `Custom ${customHeatThemes.length + 1}`,
+      `Custom ${customHeatThemes.length + 1}`
+    );
+    setDraftTheme(next);
+    setEditMode(displayMode);
+  };
+
+  const updateDraft = (updater: (theme: HeatTheme) => HeatTheme) => {
+    setDraftTheme((current) => (current ? updater(current) : current));
+  };
+
+  const handleSave = () => {
+    if (!draftTheme) {
+      return;
+    }
+    const exists = customHeatThemes.some((theme) => theme.id === draftTheme.id);
+    onCustomHeatThemesChange(
+      exists
+        ? customHeatThemes.map((theme) => (theme.id === draftTheme.id ? draftTheme : theme))
+        : [...customHeatThemes, draftTheme]
+    );
+    onHeatThemeIdChange(draftTheme.id);
+    setDraftTheme(null);
+    toast.success(messages.heatThemeSaved);
+  };
+
+  const handleCancel = () => {
+    setDraftTheme(null);
+  };
+
+  const handleDeleteCustom = () => {
+    if (activeHeatTheme.builtin || draftTheme) {
+      return;
+    }
+    const remaining = customHeatThemes.filter((theme) => theme.id !== activeHeatTheme.id);
+    onCustomHeatThemesChange(remaining);
+    onHeatThemeIdChange(defaultHeatThemeId);
+  };
+
+  const handleExport = () => {
+    try {
+      const payload = buildHeatThemeExport(draftTheme ?? activeHeatTheme);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${payload.theme.nameEn.replace(/\s+/g, "-").toLowerCase() || "heatmap-theme"}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error(messages.heatThemeExportFailed);
+    }
+  };
+
+  const handleImportFile = async (file: File | null) => {
+    if (!file) {
+      return;
+    }
+    try {
+      const text = await file.text();
+      const imported = parseHeatThemeExport(text);
+      if (!imported) {
+        toast.error(messages.heatThemeImportFailed);
+        return;
+      }
+      setDraftTheme(imported);
+      setEditMode(displayMode);
+      toast.success(messages.heatThemeImportSuccess);
+    } catch {
+      toast.error(messages.heatThemeImportFailed);
+    } finally {
+      if (importInputRef.current) {
+        importInputRef.current.value = "";
+      }
+    }
+  };
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold">{messages.heatThemeLabel}</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{messages.heatThemeIntro}</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+        {availableThemes.map((theme) => {
+          const active = !isEditing && heatThemeId === theme.id;
+          const stops = displayMode === "light" ? theme.light : theme.dark;
+          return (
+            <button
+              key={theme.id}
+              type="button"
+              disabled={isEditing}
+              onClick={() => onHeatThemeIdChange(theme.id)}
+              aria-pressed={active}
+              className={cn(
+                "border px-2.5 py-1.5 text-left transition-colors",
+                active
+                  ? "border-brand/70 bg-brand/15"
+                  : "border-border bg-background/70 hover:bg-muted",
+                isEditing && "cursor-not-allowed opacity-55"
+              )}
+            >
+              <div className="flex items-center justify-between gap-1.5">
+                <span className="truncate text-[12px] font-semibold text-foreground">
+                  {getHeatThemeDisplayName(theme, locale, messages)}
+                </span>
+                {!theme.builtin && (
+                  <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {messages.heatThemeCustom}
+                  </span>
+                )}
+              </div>
+              <div
+                className="mt-1.5 h-1.5 w-full border border-border/70"
+                style={{
+                  background: previewGradientFromStops(stops, priceColorMode === "red-rise"),
+                }}
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {!isEditing && (
+          <>
+            <button
+              type="button"
+              onClick={startCreateCustom}
+              className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {messages.heatThemeCreateCustom}
+            </button>
+            {!activeHeatTheme.builtin && (
+              <button
+                type="button"
+                onClick={startEditExisting}
+                className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {messages.heatThemeEdit}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleExport}
+              className="inline-flex items-center gap-1 border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Download className="size-3" />
+              {messages.heatThemeExport}
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {messages.heatThemeImport}
+            </button>
+            {!activeHeatTheme.builtin && (
+              <button
+                type="button"
+                onClick={handleDeleteCustom}
+                className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-destructive transition-colors hover:bg-muted"
+              >
+                {messages.heatThemeDeleteCustom}
+              </button>
+            )}
+          </>
+        )}
+        <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)}
+        />
+      </div>
+
+      {draftTheme && editingStops && (
+        <div className="space-y-2.5 border border-brand/40 bg-brand/5 p-2.5">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">{messages.heatThemeEditingHint}</p>
+
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
+              <span>{messages.heatThemeNameZh}</span>
+              <input
+                value={draftTheme.nameZh}
+                onChange={(event) =>
+                  updateDraft((theme) => ({ ...theme, nameZh: event.target.value }))
+                }
+                className="w-full border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus:border-brand/60"
+              />
+            </label>
+            <label className="space-y-1 text-[11px] text-muted-foreground">
+              <span>{messages.heatThemeNameEn}</span>
+              <input
+                value={draftTheme.nameEn}
+                onChange={(event) =>
+                  updateDraft((theme) => ({ ...theme, nameEn: event.target.value }))
+                }
+                className="w-full border border-border bg-background px-2 py-1.5 text-[12px] text-foreground outline-none focus:border-brand/60"
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => setEditMode("dark")}
+              className={cn(
+                "border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                editMode === "dark"
+                  ? "border-brand/70 bg-brand/15 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {messages.heatThemeEditDark}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditMode("light")}
+              className={cn(
+                "border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                editMode === "light"
+                  ? "border-brand/70 bg-brand/15 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {messages.heatThemeEditLight}
+            </button>
+          </div>
+
+          <div
+            className="h-1.5 w-full border border-border/70"
+            style={{
+              background: previewGradientFromStops(editingStops, priceColorMode === "red-rise"),
+            }}
+          />
+
+          <div className="space-y-1">
+            {heatStopFields.map((field) => {
+              const color = editingStops[field];
+              const hex = rgbToHex(color);
+              return (
+                <label
+                  key={field}
+                  className="flex items-center justify-between gap-2 border border-border/80 bg-background/70 px-2 py-1"
+                >
+                  <span className="min-w-0 truncate text-[12px] text-muted-foreground">
+                    {getHeatStopLabel(messages, field)}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <input
+                      type="color"
+                      value={hex}
+                      onChange={(event) => {
+                        const next = parseHexColor(event.target.value);
+                        if (!next) {
+                          return;
+                        }
+                        updateDraft((theme) => ({
+                          ...theme,
+                          [editMode]: {
+                            ...theme[editMode],
+                            [field]: next,
+                          },
+                        }));
+                      }}
+                      className="size-6 cursor-pointer border border-border bg-transparent p-0"
+                    />
+                    <input
+                      value={hex}
+                      onChange={(event) => {
+                        const next = parseHexColor(event.target.value);
+                        if (!next) {
+                          return;
+                        }
+                        updateDraft((theme) => ({
+                          ...theme,
+                          [editMode]: {
+                            ...theme[editMode],
+                            [field]: next,
+                          },
+                        }));
+                      }}
+                      className="w-[6.5rem] border border-border bg-background px-1.5 py-1 font-mono text-[11px] text-foreground outline-none focus:border-brand/60"
+                    />
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={handleSave}
+              className="border border-brand/70 bg-brand/20 px-2.5 py-1.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-brand/30"
+            >
+              {messages.heatThemeSave}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {messages.heatThemeCancel}
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              className="inline-flex items-center gap-1 border border-border bg-background/70 px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Download className="size-3" />
+              {messages.heatThemeExport}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SettingsDrawer({
   open,
   tab,
@@ -1623,12 +2054,20 @@ function SettingsDrawer({
   displayMode,
   themeColor,
   priceColorMode,
+  heatThemeId,
+  customHeatThemes,
+  activeHeatTheme,
+  shortcutBindings,
   onClose,
   onTabChange,
   onLocaleChange,
   onDisplayModeChange,
   onThemeColorChange,
   onPriceColorModeChange,
+  onHeatThemeIdChange,
+  onCustomHeatThemesChange,
+  onShortcutBindingsChange,
+  onShortcutRecordingChange,
   areaTipMessage,
 }: {
   open: boolean;
@@ -1638,6 +2077,10 @@ function SettingsDrawer({
   displayMode: DisplayMode;
   themeColor: ThemeColorKey;
   priceColorMode: PriceColorMode;
+  heatThemeId: string;
+  customHeatThemes: HeatTheme[];
+  activeHeatTheme: HeatTheme;
+  shortcutBindings: ShortcutBindings;
   areaTipMessage: string;
   onClose: () => void;
   onTabChange: (tab: SettingsTab) => void;
@@ -1645,7 +2088,82 @@ function SettingsDrawer({
   onDisplayModeChange: (mode: DisplayMode) => void;
   onThemeColorChange: (theme: ThemeColorKey) => void;
   onPriceColorModeChange: (mode: PriceColorMode) => void;
+  onHeatThemeIdChange: (id: string) => void;
+  onCustomHeatThemesChange: (themes: HeatTheme[]) => void;
+  onShortcutBindingsChange: (bindings: ShortcutBindings) => void;
+  onShortcutRecordingChange: (recording: boolean) => void;
 }) {
+  const isMobile = useIsMobile();
+  const [recordingAction, setRecordingAction] = useState<ShortcutActionId | null>(null);
+
+  useEffect(() => {
+    if (!open || tab !== "shortcuts") {
+      setRecordingAction(null);
+    }
+  }, [open, tab]);
+
+  useEffect(() => {
+    if (isMobile && (tab === "shortcuts" || tab === "help")) {
+      onTabChange("appearance");
+    }
+  }, [isMobile, onTabChange, tab]);
+
+  useEffect(() => {
+    onShortcutRecordingChange(Boolean(recordingAction));
+    return () => {
+      onShortcutRecordingChange(false);
+    };
+  }, [onShortcutRecordingChange, recordingAction]);
+
+  useEffect(() => {
+    if (!open || !recordingAction) {
+      return;
+    }
+
+    const action = recordingAction;
+
+    function onKeyDown(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setRecordingAction(null);
+        return;
+      }
+
+      const key = formatShortcutKey(event);
+      if (!key) {
+        toast.error(messages.settingsShortcutsInvalid, { id: "shortcut-remap" });
+        return;
+      }
+
+      const result = withReboundShortcut(shortcutBindings, action, key);
+      if (result.invalid) {
+        toast.error(messages.settingsShortcutsInvalid, { id: "shortcut-remap" });
+        return;
+      }
+
+      if (result.conflict) {
+        toast.error(
+          messages.settingsShortcutsConflict.replace(
+            "{action}",
+            getShortcutActionLabel(messages, result.conflict)
+          ),
+          { id: "shortcut-remap" }
+        );
+        return;
+      }
+
+      onShortcutBindingsChange(result.bindings);
+      setRecordingAction(null);
+    }
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [messages, onShortcutBindingsChange, open, recordingAction, shortcutBindings]);
+
   if (!open) {
     return null;
   }
@@ -1659,11 +2177,15 @@ function SettingsDrawer({
     messages.tipDrag,
     messages.tipInspectorScroll,
     messages.tipInspectorSort,
-    messages.tipFullscreen,
   ];
   const tabs: Array<{ key: SettingsTab; label: string; icon: typeof Palette }> = [
     { key: "appearance", label: messages.settingsAppearance, icon: Palette },
-    { key: "help", label: messages.settingsHelp, icon: Info },
+    ...(!isMobile
+      ? [
+          { key: "shortcuts" as const, label: messages.settingsShortcuts, icon: Keyboard },
+          { key: "help" as const, label: messages.settingsHelp, icon: Info },
+        ]
+      : []),
     { key: "project", label: messages.settingsProject, icon: ExternalLink },
   ];
   const themeLabels: Record<ThemeColorKey, string> = isEnglish
@@ -1673,7 +2195,7 @@ function SettingsDrawer({
   return (
     <div className="absolute inset-0 z-[10010] flex items-end justify-center bg-black/62 backdrop-blur-sm" role="dialog" aria-modal="true">
       <button type="button" className="absolute inset-0" aria-label={messages.closeSheet} onClick={onClose} />
-      <section className="relative flex h-[82dvh] w-full flex-col overflow-hidden rounded-t-lg border border-b-0 border-border bg-card text-card-foreground shadow-[0_-24px_100px_rgba(0,0,0,0.48)]">
+      <section className="relative flex h-[92dvh] w-full flex-col overflow-hidden rounded-t-lg border border-b-0 border-border bg-card text-card-foreground shadow-[0_-24px_100px_rgba(0,0,0,0.48)]">
         <div className="flex items-center justify-center pt-2">
           <span className="h-1 w-10 rounded-full bg-muted-foreground/40" aria-hidden />
         </div>
@@ -1717,18 +2239,18 @@ function SettingsDrawer({
             })}
           </nav>
 
-          <div className="min-h-0 overflow-y-auto p-4">
+          <div className="min-h-0 overflow-y-auto p-3 md:p-4">
             {tab === "appearance" && (
-              <div className="space-y-6">
+              <div className="space-y-4 md:space-y-6">
                 <section>
                   <h3 className="text-sm font-semibold">{messages.languageLabel}</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => onLocaleChange("zh")}
                       aria-pressed={locale === "zh"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         locale === "zh"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -1741,7 +2263,7 @@ function SettingsDrawer({
                       onClick={() => onLocaleChange("en")}
                       aria-pressed={locale === "en"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         locale === "en"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -1754,13 +2276,13 @@ function SettingsDrawer({
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.displayMode}</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => onDisplayModeChange("light")}
                       aria-pressed={displayMode === "light"}
                       className={cn(
-                        "flex items-center gap-2 border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "flex items-center gap-2 border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         displayMode === "light"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -1774,7 +2296,7 @@ function SettingsDrawer({
                       onClick={() => onDisplayModeChange("dark")}
                       aria-pressed={displayMode === "dark"}
                       className={cn(
-                        "flex items-center gap-2 border px-3 py-3 text-left text-sm font-semibold transition-colors",
+                        "flex items-center gap-2 border px-3 py-2 text-left text-sm font-semibold transition-colors md:py-3",
                         displayMode === "dark"
                           ? "border-brand/70 bg-brand/15 text-foreground"
                           : "border-border bg-background/70 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -1788,7 +2310,7 @@ function SettingsDrawer({
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.themeColor}</h3>
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {(Object.keys(themeColors) as ThemeColorKey[]).map((key) => (
                       <button
                         key={key}
@@ -1814,13 +2336,13 @@ function SettingsDrawer({
 
                 <section>
                   <h3 className="text-sm font-semibold">{messages.priceColor}</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => onPriceColorModeChange("red-rise")}
                       aria-pressed={priceColorMode === "red-rise"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm transition-colors",
+                        "border px-3 py-2 text-left text-sm transition-colors md:py-3",
                         priceColorMode === "red-rise"
                           ? "border-brand/70 bg-brand/15"
                           : "border-border bg-background/70 hover:bg-muted"
@@ -1834,7 +2356,7 @@ function SettingsDrawer({
                       onClick={() => onPriceColorModeChange("green-rise")}
                       aria-pressed={priceColorMode === "green-rise"}
                       className={cn(
-                        "border px-3 py-3 text-left text-sm transition-colors",
+                        "border px-3 py-2 text-left text-sm transition-colors md:py-3",
                         priceColorMode === "green-rise"
                           ? "border-brand/70 bg-brand/15"
                           : "border-border bg-background/70 hover:bg-muted"
@@ -1845,37 +2367,203 @@ function SettingsDrawer({
                     </button>
                   </div>
                 </section>
+
+                <HeatThemeSettingsPanel
+                  messages={messages}
+                  locale={locale}
+                  displayMode={displayMode}
+                  priceColorMode={priceColorMode}
+                  heatThemeId={heatThemeId}
+                  customHeatThemes={customHeatThemes}
+                  activeHeatTheme={activeHeatTheme}
+                  onHeatThemeIdChange={onHeatThemeIdChange}
+                  onCustomHeatThemesChange={onCustomHeatThemesChange}
+                />
               </div>
             )}
 
-            {tab === "help" && (
-              <section>
-                <h3 className="text-sm font-semibold">{messages.helpTitle}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.helpIntro}</p>
-                <div className="mt-4 space-y-2">
-                  {helpItems.map((item) => (
-                    <div key={item} className="border border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
-                      {item.replace(/^·\s*/, "")}
-                    </div>
-                  ))}
+            {tab === "shortcuts" && (
+              <section className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold">{messages.settingsShortcuts}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {messages.settingsShortcutsIntro}
+                  </p>
                 </div>
+                <div className="space-y-2">
+                  {shortcutActionIds.map((action) => {
+                    const active = recordingAction === action;
+                    return (
+                      <button
+                        key={action}
+                        type="button"
+                        onClick={() =>
+                          setRecordingAction((current) => (current === action ? null : action))
+                        }
+                        className={cn(
+                          "flex w-full items-center justify-between gap-3 border px-3 py-2.5 text-left transition-colors",
+                          active
+                            ? "border-brand/70 bg-brand/15"
+                            : "border-border bg-background/70 hover:bg-muted"
+                        )}
+                      >
+                        <span className="min-w-0 text-sm font-medium text-foreground">
+                          {getShortcutActionLabel(messages, action)}
+                        </span>
+                        <span
+                          className={cn(
+                            "inline-flex min-w-10 shrink-0 items-center justify-center border px-2 py-1 font-mono text-xs font-semibold",
+                            active
+                              ? "border-brand/50 bg-background/80 text-foreground"
+                              : "border-border bg-muted/40 text-muted-foreground"
+                          )}
+                        >
+                          {active
+                            ? messages.settingsShortcutsRecording
+                            : formatShortcutLabel(shortcutBindings[action])}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecordingAction(null);
+                    onShortcutBindingsChange({ ...defaultShortcutBindings });
+                  }}
+                  className="border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {messages.settingsShortcutsReset}
+                </button>
               </section>
             )}
 
+            {tab === "help" && (
+              <div className="space-y-6">
+                <section>
+                  <h3 className="text-sm font-semibold">{messages.helpTitle}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.helpIntro}</p>
+                  <div className="mt-4 space-y-2">
+                    {helpItems.map((item) => (
+                      <div
+                        key={item}
+                        className="border border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground"
+                      >
+                        {item.replace(/^·\s*/, "")}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <h3 className="text-sm font-semibold">{messages.helpShortcutsTitle}</h3>
+                  <div className="mt-3 overflow-hidden border border-border">
+                    {shortcutActionIds.map((action, index) => (
+                      <div
+                        key={action}
+                        className={cn(
+                          "flex items-center justify-between gap-3 bg-background/70 px-3 py-2 text-sm",
+                          index > 0 && "border-t border-border"
+                        )}
+                      >
+                        <span className="min-w-0 text-muted-foreground">
+                          {getShortcutActionLabel(messages, action)}
+                        </span>
+                        <span className="inline-flex min-w-8 shrink-0 items-center justify-center border border-border bg-muted/40 px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
+                          {formatShortcutLabel(shortcutBindings[action])}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onTabChange("shortcuts")}
+                    className="mt-3 border border-border bg-background/70 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    {messages.helpShortcutsCta}
+                  </button>
+                </section>
+              </div>
+            )}
+
             {tab === "project" && (
-              <section>
-                <h3 className="text-sm font-semibold">{messages.githubProject}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{messages.githubProjectDescription}</p>
-                <a
-                  href={githubProjectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-4 inline-flex items-center gap-2 border border-border bg-background/80 px-3 py-2 text-sm font-semibold text-foreground transition-colors hover:bg-muted"
-                >
-                  <ExternalLink className="size-4" />
-                  github.com/wenyuanw/a-share-heatmap
-                </a>
-              </section>
+              <div className="space-y-4">
+                <section className="border border-border bg-background/70 p-3.5">
+                  <div className="flex items-start gap-3">
+                    <span className="inline-flex size-9 shrink-0 items-center justify-center border border-border bg-muted/40 text-foreground">
+                      <GitHubMark className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold">{messages.githubProject}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {messages.githubProjectDescription}
+                      </p>
+                      <a
+                        href={githubProjectUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand transition-colors hover:text-brand/80"
+                      >
+                        github.com/wenyuanw/a-share-heatmap
+                        <ExternalLink className="size-3.5 opacity-80" />
+                      </a>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="border border-border bg-background/70 p-3.5">
+                  <div className="flex items-start gap-3">
+                    <span className="inline-flex size-9 shrink-0 items-center justify-center border border-border bg-muted/40 text-foreground">
+                      <Mail className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold">{messages.projectAuthorTitle}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        {messages.projectAuthorDescription}
+                      </p>
+                      <a
+                        href={authorMailto}
+                        className="mt-3 inline-flex items-center gap-1.5 font-mono text-[12px] font-semibold text-foreground transition-colors hover:text-brand"
+                      >
+                        {messages.projectAuthorEmail}
+                      </a>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="relative overflow-hidden border border-dashed border-brand/45 bg-brand/8 p-3.5">
+                  <div
+                    className="pointer-events-none absolute -right-6 -top-6 size-24 rotate-12 border border-brand/20 bg-brand/10"
+                    aria-hidden
+                  />
+                  <div className="relative flex items-start gap-3">
+                    <span className="inline-flex size-9 shrink-0 items-center justify-center border border-brand/40 bg-brand/15 text-brand">
+                      <Megaphone className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-foreground">{messages.projectAdTitle}</h3>
+                        <span className="border border-brand/40 bg-brand/15 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-brand">
+                          OPEN
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                        {messages.projectAdDescription}
+                      </p>
+                      <a
+                        href={`${authorMailto}?subject=${encodeURIComponent(
+                          locale === "zh" ? "广告位招租咨询" : "Ad slot inquiry"
+                        )}`}
+                        className="mt-3 inline-flex items-center gap-1.5 border border-brand/50 bg-brand/15 px-2.5 py-1.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-brand/25"
+                      >
+                        {messages.projectAdCta}
+                        <Mail className="size-3.5 opacity-80" />
+                      </a>
+                    </div>
+                  </div>
+                </section>
+              </div>
             )}
           </div>
         </div>
@@ -1895,8 +2583,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [displayMode, setDisplayMode] = useState<DisplayMode>("dark");
   const [themeColor, setThemeColor] = useState<ThemeColorKey>("red");
   const [priceColorMode, setPriceColorMode] = useState<PriceColorMode>("red-rise");
+  const [heatThemeId, setHeatThemeId] = useState(defaultHeatThemeId);
+  const [customHeatThemes, setCustomHeatThemes] = useState<HeatTheme[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
+  const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(() => ({
+    ...defaultShortcutBindings,
+  }));
+  const [shortcutRecording, setShortcutRecording] = useState(false);
   const [market, setMarket] = useState<MarketKey>("all");
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
   const [boardFilter, setBoardFilter] = useState(allBoardsValue);
@@ -1928,7 +2622,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const isEnglish = locale === "en";
   const isLightMode = displayMode === "light";
   const isMobile = useIsMobile();
-  const legendGradient = useMemo(() => getLegendGradient(priceColorMode), [priceColorMode]);
+  const activeHeatTheme = useMemo(
+    () => resolveHeatTheme(heatThemeId, customHeatThemes),
+    [customHeatThemes, heatThemeId]
+  );
+  const legendGradient = useMemo(
+    () => getLegendGradient(activeHeatTheme, priceColorMode, displayMode),
+    [activeHeatTheme, displayMode, priceColorMode]
+  );
   const heatmapCanvasTheme = heatmapCanvasThemes[displayMode];
   const brandStyle = useMemo(
     () =>
@@ -1938,8 +2639,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }) as CSSProperties,
     [themeColor]
   );
-  const riseTextClass = getRiseTextClass(priceColorMode);
-  const fallTextClass = getFallTextClass(priceColorMode);
+  const riseTextColor = getRiseTextColor(activeHeatTheme, priceColorMode, displayMode);
+  const fallTextColor = getFallTextColor(activeHeatTheme, priceColorMode, displayMode);
 
   const activeStockCode = isMobile ? selectedStockCode : hoveredStockCode;
   const activeBoardName = isMobile ? selectedBoardName : hoveredBoardName;
@@ -2004,6 +2705,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const storedTheme = window.localStorage.getItem("heatmap-theme-color");
       const storedPriceColor = window.localStorage.getItem("heatmap-price-color");
       const storedSizeMode = window.localStorage.getItem("heatmap-size-mode");
+      const storedMarket = window.sessionStorage.getItem(marketStorageKey);
+      const storedPeriod = window.sessionStorage.getItem(periodStorageKey);
+      const storedBoardFilter = window.sessionStorage.getItem(boardFilterStorageKey);
+      const storedTrendFilter = window.sessionStorage.getItem(trendFilterStorageKey);
+      const storedShortcuts = window.localStorage.getItem(shortcutStorageKey);
+      const storedHeatThemeId = window.localStorage.getItem(heatThemeStorageKey);
+      const storedCustomHeatThemes = window.localStorage.getItem(customHeatThemesStorageKey);
+      const seedFlag = window.localStorage.getItem(heatThemesSeedStorageKey);
 
       if (storedLocale === "zh" || storedLocale === "en") {
         setLocale(storedLocale);
@@ -2019,6 +2728,37 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
       if (storedSizeMode === "marketCap" || storedSizeMode === "turnover") {
         setSizeMode(storedSizeMode);
+      }
+      if (storedMarket && isMarketKey(storedMarket)) {
+        setMarket(storedMarket);
+      }
+      if (storedPeriod && isHeatmapPeriodKey(storedPeriod)) {
+        setPeriod(storedPeriod);
+      }
+      if (storedBoardFilter) {
+        setBoardFilter(storedBoardFilter);
+      }
+      if (
+        storedTrendFilter === allTrendsValue ||
+        storedTrendFilter === risingOnlyValue ||
+        storedTrendFilter === fallingOnlyValue
+      ) {
+        setTrendFilter(storedTrendFilter);
+      }
+      setShortcutBindings(parseStoredShortcuts(storedShortcuts));
+      let customThemes = parseStoredCustomHeatThemes(storedCustomHeatThemes);
+      if (!seedFlag) {
+        customThemes = mergeSeedHeatThemes(customThemes);
+        try {
+          window.localStorage.setItem(heatThemesSeedStorageKey, "1");
+          window.localStorage.setItem(customHeatThemesStorageKey, serializeCustomHeatThemes(customThemes));
+        } catch {
+          /* Preferences are optional. */
+        }
+      }
+      setCustomHeatThemes(customThemes);
+      if (storedHeatThemeId) {
+        setHeatThemeId(resolveHeatTheme(storedHeatThemeId, customThemes).id);
       }
     } catch {
       /* Preferences are optional. */
@@ -2088,11 +2828,77 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
   }, [preferencesReady, sizeMode]);
 
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(marketStorageKey, market);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [market, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(periodStorageKey, period);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [period, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(boardFilterStorageKey, boardFilter);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [boardFilter, preferencesReady]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(trendFilterStorageKey, trendFilter);
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, trendFilter]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(shortcutStorageKey, serializeShortcuts(shortcutBindings));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [preferencesReady, shortcutBindings]);
+
+  useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(heatThemeStorageKey, heatThemeId);
+      window.localStorage.setItem(customHeatThemesStorageKey, serializeCustomHeatThemes(customHeatThemes));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }, [customHeatThemes, heatThemeId, preferencesReady]);
+
   const areaTipMessage = useMemo(
     () => (sizeMode === "turnover" ? messages.tipAreaTurnover : messages.tipAreaMarketCap),
     [messages.tipAreaMarketCap, messages.tipAreaTurnover, sizeMode]
   );
-
   const refreshSize = useCallback(() => {
     const target = viewportRef.current;
     if (!target) {
@@ -2170,24 +2976,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   }, []);
 
   useEffect(() => {
-    if (!isFullscreen) {
-      return;
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsFullscreen(false);
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isFullscreen]);
-
-  useEffect(() => {
     if (inspectorListRef.current) {
       inspectorListRef.current.scrollTop = 0;
     }
@@ -2260,6 +3048,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   }, []);
 
   useEffect(() => {
+    if (!preferencesReady) {
+      return;
+    }
+
     let cancelled = false;
 
     async function loadTreemap() {
@@ -2291,27 +3083,33 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     return () => {
       cancelled = true;
     };
-  }, [fetchTreemap, market, messages.errorLoad, period]);
+  }, [fetchTreemap, market, messages.errorLoad, period, preferencesReady]);
 
   usePollWhileVisible(
     useCallback(async () => {
+      if (!preferencesReady) {
+        return;
+      }
       try {
         await fetchQuotes(market, period);
       } catch {
         setError(messages.errorLoad);
       }
-    }, [fetchQuotes, market, messages.errorLoad, period]),
+    }, [fetchQuotes, market, messages.errorLoad, period, preferencesReady]),
     refreshIntervalMs
   );
 
   usePollWhileVisible(
     useCallback(async () => {
+      if (!preferencesReady) {
+        return;
+      }
       try {
         await fetchMarketSummaries(period);
       } catch {
         // Keep existing summaries if the refresh fails.
       }
-    }, [fetchMarketSummaries, period]),
+    }, [fetchMarketSummaries, period, preferencesReady]),
     refreshIntervalMs
   );
 
@@ -2534,7 +3332,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
 
       const subBoards = groupStocksBySubBoard(boardBox.item.children, quotes);
-      const shouldNestSubBoards = subBoards.length > 1;
+      const shouldNestSubBoards = market !== "zza50" && subBoards.length > 1;
 
       if (!shouldNestSubBoards) {
         const stockBoxes = binaryTreemap(
@@ -2553,7 +3351,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
             code: stockBox.item.code,
             name: stockBox.item.name,
             boardName: boardBox.item.name,
-            subBoardName: stockBox.item.subBoardName,
+            subBoardName: market === "zza50" ? boardBox.item.name : stockBox.item.subBoardName,
             value: stockBox.item.value,
             x: stockBox.x,
             y: stockBox.y,
@@ -2633,7 +3431,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     return { stockRects, boardRects, subBoardRects };
-  }, [canvasSize.height, canvasSize.width, quotes, sizedTreemapData]);
+  }, [canvasSize.height, canvasSize.width, market, quotes, sizedTreemapData]);
 
   useEffect(() => {
     lastStockRectsRef.current = layout.stockRects;
@@ -2964,7 +3762,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     for (const stock of layout.stockRects) {
-      context.fillStyle = getHeatColor(stock.changePct, priceColorMode);
+      context.fillStyle = getHeatColor(activeHeatTheme, stock.changePct, priceColorMode, displayMode);
       context.fillRect(stock.x, stock.y, stock.width, stock.height);
       drawStockLabel(context, stock, view.scale);
     }
@@ -2974,11 +3772,18 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         activeSubBoardName === subBoard.name && activeBoardName === subBoard.boardName;
 
       if (subBoard.titleHeight > 0) {
-        context.fillStyle = getBoardHeaderColor(subBoard.changePct, priceColorMode);
+        context.fillStyle = getBoardHeaderColor(
+          activeHeatTheme,
+          subBoard.changePct,
+          priceColorMode,
+          displayMode
+        );
         context.fillRect(subBoard.x, subBoard.y, subBoard.width, subBoard.titleHeight);
       }
 
-      context.strokeStyle = isActiveSubBoard ? "#5eead4" : heatmapCanvasTheme.subBoardBorder;
+      context.strokeStyle = isActiveSubBoard
+        ? heatmapCanvasTheme.activeSubBoardStroke
+        : heatmapCanvasTheme.subBoardBorder;
       context.lineWidth = isActiveSubBoard ? 2 : 0.9;
       context.strokeRect(
         subBoard.x + 0.5,
@@ -3023,7 +3828,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       const showDrillHint = boardFilter === allBoardsValue && board.width > 72 && board.titleHeight > 10;
 
       if (board.titleHeight > 0) {
-        context.fillStyle = getBoardHeaderColor(board.changePct, priceColorMode);
+        context.fillStyle = getBoardHeaderColor(activeHeatTheme, board.changePct, priceColorMode, displayMode);
         context.fillRect(board.x, board.y, board.width, board.titleHeight);
 
         if (isActiveBoard || isTitleHovered) {
@@ -3032,7 +3837,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         }
       }
 
-      context.strokeStyle = isActiveBoard || isTitleHovered ? "#f6d36d" : heatmapCanvasTheme.boardBorder;
+      context.strokeStyle =
+        isActiveBoard || isTitleHovered
+          ? heatmapCanvasTheme.activeBoardStroke
+          : heatmapCanvasTheme.boardBorder;
       context.lineWidth = isActiveBoard || isTitleHovered ? 1.8 : 1;
       context.strokeRect(board.x + 0.5, board.y + 0.5, Math.max(0, board.width - 1), Math.max(0, board.height - 1));
 
@@ -3101,6 +3909,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     layout.subBoardRects,
     layout.stockRects,
     messages.boardBreadcrumbAll,
+    activeHeatTheme,
+    displayMode,
     priceColorMode,
     view.scale,
     view.x,
@@ -3755,13 +4565,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     try {
       const pixelRatio = sourceCanvas.width / Math.max(1, canvasSize.width);
       const baseWidth = Math.max(1, canvasSize.width);
-      const cssFontPx = clamp(baseWidth * 0.012, 11, 16);
-      const cssHorizontalPadding = clamp(baseWidth * 0.015, 12, 22);
-      const cssTopPadding = cssFontPx * 2 + 8;
-      const cssBottomPadding = 18;
+      const cssFontPx = clamp(baseWidth * 0.0085, 9, 11);
+      const cssHorizontalPadding = clamp(baseWidth * 0.008, 6, 12);
+      const cssBandPadding = cssFontPx * 1.55 + 2;
       const horizontalPadding = cssHorizontalPadding * pixelRatio;
-      const topPadding = cssTopPadding * pixelRatio;
-      const bottomPadding = cssBottomPadding * pixelRatio;
+      const topPadding = cssBandPadding * pixelRatio;
+      const bottomPadding = cssBandPadding * pixelRatio;
       const fontPx = cssFontPx * pixelRatio;
       const exportCanvas = document.createElement("canvas");
       exportCanvas.width = Math.round(sourceCanvas.width + horizontalPadding * 2);
@@ -3773,8 +4582,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       }
 
       const background = context.createLinearGradient(0, 0, exportCanvas.width, exportCanvas.height);
-      background.addColorStop(0, isLightMode ? "#f8fafc" : "#151922");
-      background.addColorStop(1, isLightMode ? "#e9eef5" : "#0f1319");
+      background.addColorStop(0, isLightMode ? heatmapCanvasThemes.light.backgroundStart : "#151922");
+      background.addColorStop(1, isLightMode ? heatmapCanvasThemes.light.backgroundEnd : "#0f1319");
       context.fillStyle = background;
       context.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
       context.drawImage(sourceCanvas, horizontalPadding, topPadding);
@@ -3795,8 +4604,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       const shareTitle =
         baseWidth < 520
-          ? `大 A 云图 ${getCompactPeriodLabel(period, "zh")} ${formatShareTimestamp(updatedAt)}`
-          : `大 A 云图｜${getPeriodLabel(messages, period)} ${formatShareTimestamp(updatedAt)}`;
+          ? `${messages.title} ${getCompactPeriodLabel(period, "zh")} ${formatShareTimestamp(updatedAt)}`
+          : `${messages.title}｜${getPeriodLabel(messages, period)} ${formatShareTimestamp(updatedAt)}`;
       const shareUrlLight = isLightMode ? "rgba(15, 23, 42, 0.96)" : "rgba(247, 250, 252, 0.98)";
       const shareUrlParts: { text: string; fillStyle: string }[] = [
         { text: "map.wenyuanw", fillStyle: shareUrlLight },
@@ -3804,6 +4613,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       ];
 
       const headerY = topPadding / 2;
+      const footerY = exportCanvas.height - bottomPadding / 2;
       const rightEdge = exportCanvas.width - horizontalPadding;
 
       context.save();
@@ -3820,22 +4630,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         urlX += context.measureText(part.text).width;
       }
 
-      const leftBlockEnd = urlX;
-      const minCenterGap = fontPx * 0.85;
       context.textAlign = "right";
       context.fillStyle = isLightMode ? "rgba(15, 23, 42, 0.92)" : "rgba(247, 250, 252, 0.96)";
-      let titleFontPx = fontPx;
-      context.font = `600 ${titleFontPx}px Arial, sans-serif`;
-      const titleWidth = context.measureText(shareTitle).width;
-      const titleMaxWidth = Math.max(0, rightEdge - leftBlockEnd - minCenterGap);
-      if (titleWidth > titleMaxWidth && titleMaxWidth > fontPx * 1.5) {
-        titleFontPx = Math.max(
-          fontPx * 0.62,
-          Math.min(titleFontPx, (titleFontPx * titleMaxWidth) / titleWidth)
-        );
-        context.font = `600 ${titleFontPx}px Arial, sans-serif`;
-      }
-      context.fillText(shareTitle, rightEdge, headerY);
+      context.font = `600 ${fontPx}px Arial, sans-serif`;
+      context.fillText(shareTitle, rightEdge, footerY);
       context.restore();
 
       const blob = await canvasToBlob(exportCanvas);
@@ -3989,6 +4787,106 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     });
   }, []);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      if (
+        target?.isContentEditable ||
+        tagName === "INPUT" ||
+        tagName === "TEXTAREA" ||
+        tagName === "SELECT"
+      ) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (shortcutRecording) {
+          return;
+        }
+        if (sharePreview) {
+          event.preventDefault();
+          closeSharePreview();
+          return;
+        }
+        if (settingsOpen) {
+          event.preventDefault();
+          setSettingsOpen(false);
+          return;
+        }
+        if (isFullscreen) {
+          event.preventDefault();
+          setIsFullscreen(false);
+        }
+        return;
+      }
+
+      if (shortcutRecording) {
+        return;
+      }
+
+      const action = resolveShortcutAction(shortcutBindings, event);
+      if (!action) {
+        return;
+      }
+
+      if (sharePreview) {
+        return;
+      }
+
+      if (settingsOpen && action !== "settings") {
+        return;
+      }
+
+      if (action === "share" && sharePending) {
+        return;
+      }
+
+      event.preventDefault();
+
+      switch (action) {
+        case "share":
+          void createSharePreview();
+          break;
+        case "resetView":
+          resetView();
+          break;
+        case "fullscreen":
+          toggleFullscreen();
+          break;
+        case "settings":
+          setSettingsOpen((current) => !current);
+          break;
+        case "sidebar":
+          setSidebarOpen((current) => !current);
+          break;
+        case "displayMode":
+          setDisplayMode((current) => (current === "dark" ? "light" : "dark"));
+          break;
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [
+    closeSharePreview,
+    createSharePreview,
+    isFullscreen,
+    resetView,
+    settingsOpen,
+    sharePending,
+    sharePreview,
+    shortcutBindings,
+    shortcutRecording,
+    toggleFullscreen,
+  ]);
+
   const lastUpdatedText = updatedAt ? new Date(updatedAt).toLocaleTimeString() : "--:--:--";
 
   return (
@@ -4102,9 +5000,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       <span
                         className={cn(
                           "shrink-0 font-semibold tabular-nums",
-                          isEnglish ? "text-[10.5px]" : "text-[12px]",
-                          getChangeTextClass(summary?.changePct ?? 0, priceColorMode)
+                          isEnglish ? "text-[10.5px]" : "text-[12px]"
                         )}
+                        style={{
+                          color: getChangeTextColor(
+                            activeHeatTheme,
+                            summary?.changePct ?? 0,
+                            priceColorMode,
+                            displayMode
+                          ),
+                        }}
                       >
                         {summary ? formatCompactChange(summary.changePct) : "--"}
                       </span>
@@ -4292,10 +5197,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 <div className={cn("mt-1.5 border border-border bg-muted/28 p-1.5", isEnglish && "mt-1 p-[5px]")}>
                   <div className={cn("grid grid-cols-3 gap-2", isEnglish && "gap-1.5")}>
                     <div className="flex min-w-0 flex-col items-center text-center">
-                      <p className={cn("tracking-[0.06em]", riseTextClass, isEnglish ? "text-[10px]" : "text-[11px]")}>
+                      <p
+                        className={cn("tracking-[0.06em]", isEnglish ? "text-[10px]" : "text-[11px]")}
+                        style={{ color: riseTextColor }}
+                      >
                         {messages.legendRise}
                       </p>
-                      <p className={cn("mt-1 font-semibold tabular-nums", riseTextClass, isEnglish ? "text-[13px]" : "text-base")}>
+                      <p
+                        className={cn("mt-1 font-semibold tabular-nums", isEnglish ? "text-[13px]" : "text-base")}
+                        style={{ color: riseTextColor }}
+                      >
                         {formatCount(marketOverview.advanceCount, locale)}
                       </p>
                     </div>
@@ -4314,15 +5225,15 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     </div>
                     <div className="flex min-w-0 flex-col items-center text-center">
                       <p
-                        className={cn(
-                          "tracking-[0.06em]",
-                          fallTextClass,
-                          isEnglish ? "text-[10px]" : "text-[11px]"
-                        )}
+                        className={cn("tracking-[0.06em]", isEnglish ? "text-[10px]" : "text-[11px]")}
+                        style={{ color: fallTextColor }}
                       >
                         {messages.legendFall}
                       </p>
-                      <p className={cn("mt-1 font-semibold tabular-nums", fallTextClass, isEnglish ? "text-[13px]" : "text-base")}>
+                      <p
+                        className={cn("mt-1 font-semibold tabular-nums", isEnglish ? "text-[13px]" : "text-base")}
+                        style={{ color: fallTextColor }}
+                      >
                         {formatCount(marketOverview.declineCount, locale)}
                       </p>
                     </div>
@@ -4358,32 +5269,47 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                               : messages.turnoverFlatLabel;
                         const turnoverTrendColor =
                           turnoverTrend === "up"
-                            ? riseTextClass
+                            ? riseTextColor
                             : turnoverTrend === "down"
-                              ? fallTextClass
-                              : "text-muted-foreground";
+                              ? fallTextColor
+                              : undefined;
 
                         return (
                           <>
                             {isEnglish ? (
                               <div className="space-y-0.5 text-[9px] leading-tight tracking-[0.04em] text-muted-foreground">
                                 <span className="block">{messages.comparedToYesterdayLabel}</span>
-                                <span className={cn("block font-semibold", turnoverTrendColor)}>
+                                <span
+                                  className={cn(
+                                    "block font-semibold",
+                                    !turnoverTrendColor && "text-muted-foreground"
+                                  )}
+                                  style={turnoverTrendColor ? { color: turnoverTrendColor } : undefined}
+                                >
                                   {turnoverTrendLabel}
                                 </span>
                               </div>
                             ) : (
                               <p className="text-[10px] leading-tight tracking-[0.04em] text-muted-foreground">
                                 {messages.comparedToYesterdayLabel}
-                                <span className={cn("ml-1 font-semibold", turnoverTrendColor)}>{turnoverTrendLabel}</span>
+                                <span
+                                  className={cn(
+                                    "ml-1 font-semibold",
+                                    !turnoverTrendColor && "text-muted-foreground"
+                                  )}
+                                  style={turnoverTrendColor ? { color: turnoverTrendColor } : undefined}
+                                >
+                                  {turnoverTrendLabel}
+                                </span>
                               </p>
                             )}
                             <p
                               className={cn(
                                 "mt-auto whitespace-nowrap pt-1 font-semibold tracking-[-0.01em]",
                                 isEnglish ? "text-[11.5px] sm:text-[12px]" : "text-[13px] sm:text-[14px]",
-                                turnoverTrendColor
+                                !turnoverTrendColor && "text-muted-foreground"
                               )}
+                              style={turnoverTrendColor ? { color: turnoverTrendColor } : undefined}
                             >
                               {formatTurnoverAmount(Math.abs(marketOverview.turnoverDelta), locale)}
                             </p>
@@ -4418,6 +5344,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 )}
                 onClick={createSharePreview}
                 disabled={sharePending}
+                title={withShortcutTitle(messages.shareImage, shortcutBindings.share)}
               >
                 <Camera className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {sharePending ? messages.generatingShareImage : messages.shareImage}
@@ -4430,6 +5357,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
                 onClick={resetView}
+                title={withShortcutTitle(messages.resetView, shortcutBindings.resetView)}
               >
                 <RotateCcw className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.resetView}
@@ -4442,6 +5370,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
                 onClick={toggleFullscreen}
+                title={withShortcutTitle(messages.enterFullscreen, shortcutBindings.fullscreen)}
               >
                 <Maximize2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.enterFullscreen}
@@ -4454,6 +5383,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   isEnglish && "min-w-0 px-2 text-[10.5px]"
                 )}
                 onClick={() => setSettingsOpen(true)}
+                title={withShortcutTitle(messages.settingsTitle, shortcutBindings.settings)}
               >
                 <Settings2 className={cn(isEnglish ? "mr-1.5 size-3.5" : "mr-2 size-4")} />
                 {messages.settingsTitle}
@@ -4465,16 +5395,14 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         <div
           className={cn(
             "relative min-h-0 overflow-hidden",
-            isLightMode ? "bg-[#e9eef5]" : "bg-[#10141b]",
             isFullscreen ? "col-start-1 h-full" : "col-start-1 row-start-1 md:col-start-2"
           )}
+          style={{ backgroundColor: heatmapCanvasTheme.chrome }}
         >
           <div
             ref={viewportRef}
-            className={cn(
-              "relative h-full min-h-0 overflow-hidden",
-              isLightMode ? "bg-[#e9eef5]" : "bg-[#10141b]"
-            )}
+            className="relative h-full min-h-0 overflow-hidden"
+            style={{ backgroundColor: heatmapCanvasTheme.chrome }}
           >
             {isFullscreen && isMobile && (
               <button
@@ -4484,17 +5412,6 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                 aria-label={messages.exitFullscreen}
               >
                 <Minimize2 className="size-4" />
-              </button>
-            )}
-
-            {!isFullscreen && !sidebarOpen && (
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(true)}
-                aria-label={messages.expandSidebar}
-                className="absolute bottom-3 left-3 z-30 inline-flex size-11 items-center justify-center rounded-full border border-slate-500/70 bg-black/50 text-white shadow-[0_10px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:bg-black/70 md:hidden"
-              >
-                <Menu className="size-5" />
               </button>
             )}
 
@@ -4538,8 +5455,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                       className="flex items-center gap-2 border-b border-black/15 px-3 py-1.5"
                       style={{
                         backgroundColor: getBoardHeaderColor(
+                          activeHeatTheme,
                           activeInspectorStock.changePct,
-                          priceColorMode
+                          priceColorMode,
+                          displayMode
                         ),
                       }}
                       title={activeInspectorTitle ?? undefined}
@@ -4561,10 +5480,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                           {formatTurnoverAmount(activeInspectorStock.marketCap, locale)}
                         </span>
                         <span
-                          className={cn(
-                            "text-[13px] font-semibold leading-none",
-                            getChangeTextClass(activeInspectorStock.changePct, priceColorMode, "soft")
-                          )}
+                          className="text-[13px] font-semibold leading-none"
+                          style={{
+                            color: getChangeTextColor(
+                              activeHeatTheme,
+                              activeInspectorStock.changePct,
+                              priceColorMode,
+                              displayMode,
+                              "soft"
+                            ),
+                          }}
                         >
                           {formatChange(activeInspectorStock.changePct)}
                         </span>
@@ -4639,10 +5564,16 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                                 {formatPrice(stock.price)}
                               </span>
                               <span
-                                className={cn(
-                                  "text-right text-[11.5px] font-medium tabular-nums",
-                                  getChangeTextClass(stock.changePct, priceColorMode, "strong")
-                                )}
+                                className="text-right text-[11.5px] font-medium tabular-nums"
+                                style={{
+                                  color: getChangeTextColor(
+                                    activeHeatTheme,
+                                    stock.changePct,
+                                    priceColorMode,
+                                    displayMode,
+                                    "strong"
+                                  ),
+                                }}
                               >
                                 {formatChange(stock.changePct)}
                               </span>
@@ -4670,12 +5601,106 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           <div
             className={cn(
               "col-span-1 row-start-2 border-t border-border px-3 py-1.5 sm:px-4 md:col-start-2",
-              isLightMode ? "bg-card/95" : "bg-[#151a21]"
+              isLightMode ? "bg-white/88 backdrop-blur-sm" : "bg-[#151a21]"
             )}
           >
-            <div className="flex items-center justify-between gap-2 sm:gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <div className="group relative shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+                {!sidebarOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label={messages.expandSidebar}
+                    title={withShortcutTitle(messages.expandSidebar, shortcutBindings.sidebar)}
+                    className={cn(
+                      "inline-flex size-7 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                      isLightMode
+                        ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                        : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                    )}
+                  >
+                    <Menu className="size-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode((current) => (current === "dark" ? "light" : "dark"))}
+                  aria-label={isLightMode ? messages.darkMode : messages.lightMode}
+                  title={isLightMode ? messages.darkMode : messages.lightMode}
+                  className={cn(
+                    "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                    isLightMode
+                      ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                      : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                  )}
+                >
+                  {isLightMode ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
+                </button>
+                <a
+                  href={githubProjectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={messages.githubProject}
+                  title={messages.githubProject}
+                  className={cn(
+                    "hidden min-w-0 shrink-0 items-center gap-1.5 text-[11px] font-normal tracking-tight transition-colors sm:text-[12px] md:inline-flex",
+                    isLightMode
+                      ? "text-muted-foreground/60 hover:text-muted-foreground"
+                      : "text-slate-500/75 hover:text-slate-400"
+                  )}
+                >
+                  <GitHubMark className="size-3.5 shrink-0 opacity-80" />
+                  <span className="min-w-0 truncate">map.wenyuanw.me</span>
+                </a>
+              </div>
+
+              <div className="flex min-w-0 flex-1 justify-center overflow-hidden px-0.5 sm:px-2">
+                <div className="flex w-full min-w-0 max-w-52 items-center gap-1 sm:gap-1.5 md:max-w-56">
+                  <TrendingDown
+                    className="size-2.5 shrink-0 sm:size-3"
+                    style={{ color: fallTextColor }}
+                    aria-label={messages.legendFall}
+                  />
+                  <div className="relative min-w-0 flex-1 overflow-hidden">
+                    <div
+                      className="h-2.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] sm:h-3.5"
+                      style={{ background: legendGradient }}
+                    />
+                    <div
+                      className="pointer-events-none absolute inset-0 flex items-center justify-between px-0.5 text-[7px] font-semibold tabular-nums leading-none text-white sm:px-1 sm:text-[8px] md:text-[9px]"
+                      style={{ textShadow: "0 1px 2px rgba(0, 0, 0, 0.55)" }}
+                    >
+                      {legendTicks.map((tick) => (
+                        <span key={tick}>{tick === 0 ? "0" : formatCompactChange(tick)}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <TrendingUp
+                    className="size-2.5 shrink-0 sm:size-3"
+                    style={{ color: riseTextColor }}
+                    aria-label={messages.legendRise}
+                  />
+                </div>
+              </div>
+
+              <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+                <a
+                  href={githubProjectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={messages.githubProject}
+                  title={messages.githubProject}
+                  className={cn(
+                    "inline-flex size-7 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:hidden",
+                    isLightMode
+                      ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+                      : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
+                  )}
+                >
+                  <GitHubMark className="size-3.5 opacity-80" />
+                </a>
+
+                <div className="group relative hidden shrink-0 md:block">
                   <button
                     type="button"
                     aria-label={messages.operationTipsTitle}
@@ -4694,9 +5719,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                   </button>
                   <div
                     className={cn(
-                      "pointer-events-none absolute bottom-full left-0 z-40 mb-2 w-64 border p-2 text-[11px] leading-5 opacity-0 shadow-[0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+                      "pointer-events-none absolute bottom-full right-0 z-40 mb-2 w-64 border p-2 text-[11px] leading-5 opacity-0 shadow-[0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
                       isLightMode
-                        ? "border-border bg-popover/96 text-popover-foreground"
+                        ? "border-border bg-white/96 text-popover-foreground shadow-[0_12px_36px_rgba(15,23,42,0.12)]"
                         : "border-slate-700/90 bg-[#0f1319]/96 text-slate-300"
                     )}
                   >
@@ -4705,70 +5730,39 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
                     <p>{(isMobile ? messages.tipTap : messages.tipDoubleClick).replace(/^·\s*/, "")}</p>
                     <p>{(isMobile ? messages.tipPinch : messages.tipZoom).replace(/^·\s*/, "")}</p>
                     <p>{messages.tipDrag.replace(/^·\s*/, "")}</p>
-                    <p>{messages.tipInspectorScroll.replace(/^·\s*/, "")}</p>
-                    <p>{messages.tipInspectorSort.replace(/^·\s*/, "")}</p>
-                    <p>{messages.tipFullscreen.replace(/^·\s*/, "")}</p>
+                    {!isMobile && (
+                      <>
+                        <p>{messages.tipInspectorScroll.replace(/^·\s*/, "")}</p>
+                        <p>{messages.tipInspectorSort.replace(/^·\s*/, "")}</p>
+                      </>
+                    )}
                   </div>
                 </div>
 
-                <a
-                  href={githubProjectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={messages.githubProject}
-                  title={messages.githubProject}
+                <button
+                  type="button"
+                  onClick={() => setDisplayMode((current) => (current === "dark" ? "light" : "dark"))}
+                  aria-label={isLightMode ? messages.darkMode : messages.lightMode}
+                  title={withShortcutTitle(
+                    isLightMode ? messages.darkMode : messages.lightMode,
+                    shortcutBindings.displayMode
+                  )}
                   className={cn(
-                    "inline-flex size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand",
+                    "hidden size-7 shrink-0 items-center justify-center bg-transparent transition-colors hover:text-brand focus-visible:text-brand md:inline-flex",
                     isLightMode
                       ? "text-muted-foreground hover:bg-muted focus-visible:bg-muted"
                       : "text-slate-400 hover:bg-white/5 focus-visible:bg-white/5"
                   )}
                 >
-                  <GitHubMark className="size-3.5" />
-                </a>
-
-                <a
-                  href="https://map.wenyuanw.me"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="min-w-0 truncate text-[11px] font-semibold tracking-tight text-brand transition-colors hover:text-brand/85 sm:text-[12px]"
-                >
-                  map<span className="text-brand/65">.wenyuanw.me</span>
-                </a>
-              </div>
-
-              <div className="flex items-center gap-2 sm:gap-3">
-                <div className="flex w-36 items-center gap-1.5 sm:w-52 md:w-56">
-                  <TrendingDown
-                    className={cn("size-3 shrink-0", fallTextClass)}
-                    aria-label={messages.legendFall}
-                  />
-                  <div className="relative flex-1">
-                    <div
-                      className="h-3.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
-                      style={{ background: legendGradient }}
-                    />
-                    <div
-                      className="pointer-events-none absolute inset-0 flex items-center justify-between px-1 text-[8px] font-semibold tabular-nums leading-none text-white md:text-[9px]"
-                      style={{ textShadow: "0 1px 2px rgba(0, 0, 0, 0.55)" }}
-                    >
-                      {legendTicks.map((tick) => (
-                        <span key={tick}>{tick === 0 ? "0" : formatCompactChange(tick)}</span>
-                      ))}
-                    </div>
-                  </div>
-                  <TrendingUp
-                    className={cn("size-3 shrink-0", riseTextClass)}
-                    aria-label={messages.legendRise}
-                  />
-                </div>
+                  {isLightMode ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
+                </button>
 
                 <button
                   type="button"
                   onClick={createSharePreview}
                   disabled={sharePending}
                   aria-label={sharePending ? messages.generatingShareImage : messages.shareToApps}
-                  title={messages.shareImage}
+                  title={withShortcutTitle(messages.shareImage, shortcutBindings.share)}
                   className="inline-flex items-center gap-1 rounded-[14px] bg-brand px-1.5 py-1 text-[10px] font-semibold text-brand-foreground shadow-[0_2px_8px_color-mix(in_srgb,var(--brand)_38%,transparent)] transition-all hover:bg-brand/90 hover:shadow-[0_4px_12px_color-mix(in_srgb,var(--brand)_48%,transparent)] disabled:opacity-60 sm:px-2 sm:text-[11px]"
                 >
                   <Share2 className="size-3" />
@@ -4789,6 +5783,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           stocks={inspectorStocks}
           messages={messages}
           priceColorMode={priceColorMode}
+          heatTheme={activeHeatTheme}
+          displayMode={displayMode}
           sortKey={inspectorSortKey}
           onSortChange={setInspectorSortKey}
           onClose={closeMobileSheet}
@@ -4805,6 +5801,10 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         displayMode={displayMode}
         themeColor={themeColor}
         priceColorMode={priceColorMode}
+        heatThemeId={heatThemeId}
+        customHeatThemes={customHeatThemes}
+        activeHeatTheme={activeHeatTheme}
+        shortcutBindings={shortcutBindings}
         areaTipMessage={areaTipMessage}
         onClose={() => setSettingsOpen(false)}
         onTabChange={setSettingsTab}
@@ -4812,11 +5812,15 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         onDisplayModeChange={setDisplayMode}
         onThemeColorChange={setThemeColor}
         onPriceColorModeChange={setPriceColorMode}
+        onHeatThemeIdChange={setHeatThemeId}
+        onCustomHeatThemesChange={setCustomHeatThemes}
+        onShortcutBindingsChange={setShortcutBindings}
+        onShortcutRecordingChange={setShortcutRecording}
       />
 
       {sharePreview && (
-        <div className="absolute inset-0 z-[10020] flex items-center justify-center bg-black/72 p-4 backdrop-blur-sm">
-          <div className="flex max-h-full w-full max-w-5xl flex-col border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
+        <div className="absolute inset-0 z-[10020] flex items-center justify-center bg-black/72 p-2 backdrop-blur-sm sm:p-3">
+          <div className="flex max-h-[min(96vh,100%)] w-full max-w-[min(96vw,90rem)] flex-col border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(0,0,0,0.45)]">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div>
                 <h3 className="text-base font-semibold">{messages.sharePreviewTitle}</h3>
@@ -4831,12 +5835,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </button>
             </div>
 
-            <div className={cn("min-h-0 flex-1 overflow-auto p-4", isLightMode ? "bg-muted/45" : "bg-[#0f1319]")}>
+            <div className={cn("min-h-0 flex-1 overflow-auto p-3 sm:p-4", isLightMode ? "bg-muted/45" : "bg-[#0f1319]")}>
               <img
                 src={sharePreview.url}
                 alt={messages.sharePreviewTitle}
                 className={cn(
-                  "mx-auto h-auto max-w-full border shadow-[0_18px_60px_rgba(0,0,0,0.32)]",
+                  "mx-auto h-auto max-h-[calc(96vh-9.5rem)] w-auto max-w-full object-contain border shadow-[0_18px_60px_rgba(0,0,0,0.32)]",
                   isLightMode ? "border-border bg-background" : "border-slate-700/80 bg-[#10141b]"
                 )}
               />
