@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +13,8 @@ import {
 } from "react";
 import {
   Camera,
+  Check,
+  ChevronDown,
   Copy,
   Download,
   ExternalLink,
@@ -34,6 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -197,6 +201,53 @@ const marketStorageKey = "heatmap-market";
 const periodStorageKey = "heatmap-period";
 const boardFilterStorageKey = "heatmap-board-filter";
 const trendFilterStorageKey = "heatmap-trend-filter";
+
+function parseStoredBoardFilter(raw: string | null): string[] {
+  if (!raw || raw === allBoardsValue) {
+    return [];
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (item): item is string => typeof item === "string" && item.length > 0 && item !== allBoardsValue
+      );
+    }
+    if (typeof parsed === "string" && parsed.length > 0 && parsed !== allBoardsValue) {
+      return [parsed];
+    }
+  } catch {
+    /* Legacy single-board names are stored as plain strings. */
+  }
+
+  return [raw];
+}
+
+function boardFiltersEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((name, index) => name === right[index]);
+}
+
+function sanitizeBoardFilter(selected: string[], availableNames: string[]) {
+  const available = new Set(availableNames);
+  return selected.filter((name) => available.has(name));
+}
+
+function toggleBoardInFilter(current: string[], boardName: string) {
+  if (current.length === 0) {
+    return [boardName];
+  }
+
+  if (current.includes(boardName)) {
+    return current.filter((name) => name !== boardName);
+  }
+
+  return [...current, boardName];
+}
 const colorLegendSteps = [-4, -3, -2, -1, 0, 1, 2, 3, 4] as const;
 const legendTicks = [-4, -2, 0, 2, 4] as const;
 const minZoom = 1;
@@ -2593,7 +2644,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const [shortcutRecording, setShortcutRecording] = useState(false);
   const [market, setMarket] = useState<MarketKey>("all");
   const [period, setPeriod] = useState<HeatmapPeriodKey>("day");
-  const [boardFilter, setBoardFilter] = useState(allBoardsValue);
+  const [boardFilter, setBoardFilter] = useState<string[]>([]);
+  const [boardFilterMenuOpen, setBoardFilterMenuOpen] = useState(false);
+  const [boardFilterMenuStyle, setBoardFilterMenuStyle] = useState<CSSProperties | null>(null);
   const [trendFilter, setTrendFilter] = useState(allTrendsValue);
   const [sizeMode, setSizeMode] = useState<HeatmapSizeMode>("marketCap");
   const [marketSummaries, setMarketSummaries] = useState<Partial<Record<MarketKey, MarketSummary>>>({});
@@ -2649,6 +2702,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   const lastStockRectsRef = useRef<StockRect[]>([]);
   const lastBoardRectsRef = useRef<BoardRect[]>([]);
   const lastSubBoardRectsRef = useRef<SubBoardRect[]>([]);
+  const boardFilterTriggerRef = useRef<HTMLDivElement | null>(null);
+  const boardFilterListRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef({
     active: false,
     pointerX: 0,
@@ -2736,7 +2791,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
         setPeriod(storedPeriod);
       }
       if (storedBoardFilter) {
-        setBoardFilter(storedBoardFilter);
+        setBoardFilter(parseStoredBoardFilter(storedBoardFilter));
       }
       if (
         storedTrendFilter === allTrendsValue ||
@@ -2855,7 +2910,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       return;
     }
     try {
-      window.sessionStorage.setItem(boardFilterStorageKey, boardFilter);
+      window.sessionStorage.setItem(boardFilterStorageKey, JSON.stringify(boardFilter));
     } catch {
       /* Preferences are optional. */
     }
@@ -3114,12 +3169,17 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   );
 
   useEffect(() => {
-    if (!treemapData || boardFilter === allBoardsValue) {
+    if (!treemapData || boardFilter.length === 0) {
       return;
     }
 
-    if (!treemapData.nodes.some((node) => node.name === boardFilter)) {
-      setBoardFilter(allBoardsValue);
+    const nextFilter = sanitizeBoardFilter(
+      boardFilter,
+      treemapData.nodes.map((node) => node.name)
+    );
+
+    if (!boardFiltersEqual(boardFilter, nextFilter)) {
+      setBoardFilter(nextFilter);
     }
   }, [boardFilter, treemapData]);
 
@@ -3138,7 +3198,85 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     setView({ scale: 1, x: 0, y: 0 });
   }, [sizeMode]);
 
+  useEffect(() => {
+    if (!boardFilterMenuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        boardFilterTriggerRef.current?.contains(target) ||
+        boardFilterListRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setBoardFilterMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [boardFilterMenuOpen]);
+
+  useLayoutEffect(() => {
+    if (!boardFilterMenuOpen) {
+      setBoardFilterMenuStyle(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const trigger = boardFilterTriggerRef.current;
+      if (!trigger) {
+        return;
+      }
+
+      const rect = trigger.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      const gap = 4;
+      const padding = 8;
+      const spaceBelow = viewportHeight - rect.bottom - padding;
+      const spaceAbove = rect.top - padding;
+      const openUpward = spaceBelow < 168 && spaceAbove > spaceBelow;
+      const maxHeight = Math.max(120, Math.min(280, (openUpward ? spaceAbove : spaceBelow) - gap));
+
+      setBoardFilterMenuStyle({
+        position: "fixed",
+        left: rect.left,
+        width: rect.width,
+        zIndex: 80,
+        maxHeight,
+        ...(openUpward
+          ? { bottom: viewportHeight - rect.top + gap, top: "auto" }
+          : { top: rect.bottom + gap, bottom: "auto" }),
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      document.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [boardFilterMenuOpen]);
+
+  useEffect(() => {
+    if (isFullscreen || (isMobile && !sidebarOpen)) {
+      setBoardFilterMenuOpen(false);
+    }
+  }, [isFullscreen, isMobile, sidebarOpen]);
+
   const boardFilterOptions = useMemo(() => treemapData?.nodes ?? [], [treemapData]);
+  const isAllBoardsSelected = boardFilter.length === 0;
+  const selectedBoardCountLabel = messages.selectedBoardCount.replace("{count}", String(boardFilter.length));
+  const boardFilterSummary = isAllBoardsSelected
+    ? messages.allBoards
+    : boardFilter.length === 1
+      ? boardFilter[0]
+      : selectedBoardCountLabel;
 
   const visibleTreemapData = useMemo<TreemapResponse | null>(() => {
     if (!treemapData) {
@@ -3146,12 +3284,13 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     }
 
     const applyBoardFilter = (data: TreemapResponse) => {
-      if (boardFilter === allBoardsValue) {
+      if (boardFilter.length === 0) {
         return data;
       }
 
-      const selectedBoard = data.nodes.find((node) => node.name === boardFilter);
-      if (!selectedBoard) {
+      const selectedNames = new Set(boardFilter);
+      const selectedBoards = data.nodes.filter((node) => selectedNames.has(node.name));
+      if (selectedBoards.length === 0) {
         return data;
       }
 
@@ -3159,8 +3298,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       let flatCount = 0;
       let declineCount = 0;
       let turnoverAmount = 0;
+      const selectedStocks = selectedBoards.flatMap((board) => board.children);
 
-      for (const stock of selectedBoard.children) {
+      for (const stock of selectedStocks) {
         const changePct = quotes[stock.code]?.changePct ?? stock.changePct;
 
         if (changePct > flatThreshold) {
@@ -3176,8 +3316,8 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
 
       return {
         ...data,
-        stockCount: selectedBoard.stockCount,
-        boardCount: 1,
+        stockCount: selectedStocks.length,
+        boardCount: selectedBoards.length,
         summary: {
           ...data.summary,
           advanceCount,
@@ -3186,9 +3326,9 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           turnoverAmount,
           turnoverPreviousAmount: 0,
           turnoverDelta: 0,
-          indexChangePct: weightedAverageChange(selectedBoard.children, quotes),
+          indexChangePct: weightedAverageChange(selectedStocks, quotes),
         },
-        nodes: [selectedBoard],
+        nodes: selectedBoards,
       };
     };
 
@@ -3825,7 +3965,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     for (const board of layout.boardRects) {
       const isActiveBoard = activeBoardName === board.name;
       const isTitleHovered = hoveredBoardTitleName === board.name;
-      const showDrillHint = boardFilter === allBoardsValue && board.width > 72 && board.titleHeight > 10;
+      const showDrillHint = isAllBoardsSelected && board.width > 72 && board.titleHeight > 10;
 
       if (board.titleHeight > 0) {
         context.fillStyle = getBoardHeaderColor(activeHeatTheme, board.changePct, priceColorMode, displayMode);
@@ -3845,10 +3985,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       context.strokeRect(board.x + 0.5, board.y + 0.5, Math.max(0, board.width - 1), Math.max(0, board.height - 1));
 
       if (board.width > 56 && board.titleHeight > 10) {
-        const isBreadcrumb = boardFilter === board.name;
+        const isBreadcrumb = boardFilter.includes(board.name);
         const fontSize = clamp(Math.floor(board.titleHeight * 0.52), 10, 15);
         const titleText = isBreadcrumb
-          ? `‹ ${messages.boardBreadcrumbAll} - ${board.name}`
+          ? boardFilter.length === 1
+            ? `‹ ${messages.boardBreadcrumbAll} - ${board.name}`
+            : `‹ ${board.name}`
           : shortenText(board.name, board.width > 180 ? 12 : 8);
         context.fillStyle = "rgba(247, 250, 252, 0.96)";
         context.textAlign = "left";
@@ -3905,6 +4047,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
     highlightedStock,
     heatmapCanvasTheme,
     hoveredBoardTitleName,
+    isAllBoardsSelected,
     layout.boardRects,
     layout.subBoardRects,
     layout.stockRects,
@@ -4155,7 +4298,12 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
   );
 
   const toggleBoardFilter = useCallback((boardName: string) => {
-    setBoardFilter((current) => (current === boardName ? allBoardsValue : boardName));
+    setBoardFilter((current) => toggleBoardInFilter(current, boardName));
+  }, []);
+
+  const clearBoardFilter = useCallback(() => {
+    setBoardFilter([]);
+    setBoardFilterMenuOpen(false);
   }, []);
 
   const clearBoardClickTimer = useCallback(() => {
@@ -4818,6 +4966,11 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
           setSettingsOpen(false);
           return;
         }
+        if (boardFilterMenuOpen) {
+          event.preventDefault();
+          setBoardFilterMenuOpen(false);
+          return;
+        }
         if (isFullscreen) {
           event.preventDefault();
           setIsFullscreen(false);
@@ -4875,6 +5028,7 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [
+    boardFilterMenuOpen,
     closeSharePreview,
     createSharePreview,
     isFullscreen,
@@ -5019,36 +5173,146 @@ export function MarketHeatmap({ locale: initialLocale }: { locale: Locale; messa
               </div>
 
               <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
-                <label
-                  htmlFor="board-filter"
+                <p
                   className={cn(
-                    "block font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+                    "font-semibold uppercase tracking-[0.12em] text-muted-foreground",
                     isEnglish ? "text-[9px]" : "text-[10px]"
                   )}
                 >
                   {messages.boardFilterLabel}
-                </label>
-                <select
-                  id="board-filter"
-                  value={boardFilter}
-                  onChange={(event) => {
-                    setBoardFilter(event.target.value);
-                    if (isMobile) {
-                      setSidebarOpen(false);
-                    }
-                  }}
+                </p>
+                <div
+                  ref={boardFilterTriggerRef}
                   className={cn(
-                    "mt-1 h-8 w-full min-w-0 border border-border bg-background/85 px-2 font-semibold text-foreground outline-none transition-colors hover:bg-muted focus:border-brand/70",
-                    isEnglish ? "text-[10.5px]" : "text-[12px]"
+                    "mt-1 flex h-8 w-full min-w-0 items-center border",
+                    isAllBoardsSelected
+                      ? "border-border bg-background/85"
+                      : "border-brand/55 bg-brand/12"
                   )}
                 >
-                  <option value={allBoardsValue}>{messages.allBoards}</option>
-                  {boardFilterOptions.map((board) => (
-                    <option key={board.code} value={board.name}>
-                      {board.name} ({board.stockCount})
-                    </option>
-                  ))}
-                </select>
+                  <button
+                    type="button"
+                    aria-expanded={boardFilterMenuOpen}
+                    aria-haspopup="listbox"
+                    onClick={() => setBoardFilterMenuOpen((open) => !open)}
+                    className={cn(
+                      "flex h-full min-w-0 flex-1 items-center px-2 text-left font-semibold outline-none transition-colors hover:bg-muted focus:border-brand/70",
+                      isEnglish ? "text-[10.5px]" : "text-[12px]"
+                    )}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{boardFilterSummary}</span>
+                  </button>
+                  {!isAllBoardsSelected && (
+                    <button
+                      type="button"
+                      aria-label={messages.clearBoardFilter}
+                      title={messages.clearBoardFilter}
+                      onClick={clearBoardFilter}
+                      className="inline-flex size-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-hidden
+                    onClick={() => setBoardFilterMenuOpen((open) => !open)}
+                    className="inline-flex size-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <ChevronDown
+                      className={cn(
+                        "size-3.5 transition-transform",
+                        boardFilterMenuOpen && "rotate-180"
+                      )}
+                    />
+                  </button>
+                </div>
+                {boardFilterMenuOpen &&
+                  boardFilterMenuStyle &&
+                  createPortal(
+                    <div
+                      ref={boardFilterListRef}
+                      role="listbox"
+                      aria-multiselectable="true"
+                      aria-label={messages.boardFilterLabel}
+                      style={boardFilterMenuStyle}
+                      className="overflow-y-auto overscroll-contain border border-border bg-card py-0.5 shadow-[0_10px_28px_rgba(0,0,0,0.28)]"
+                    >
+                      {isAllBoardsSelected ? (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected
+                          onClick={() => setBoardFilterMenuOpen(false)}
+                          className={cn(
+                            "flex h-7 w-full items-center px-2 text-left font-semibold bg-brand/18 text-foreground",
+                            isEnglish ? "text-[10.5px]" : "text-[12px]"
+                          )}
+                        >
+                          {messages.allBoards}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={clearBoardFilter}
+                          className={cn(
+                            "flex h-7 w-full items-center gap-1.5 border-b border-border px-2 text-left font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                            isEnglish ? "text-[10.5px]" : "text-[12px]"
+                          )}
+                        >
+                          <X className="size-3.5 shrink-0" />
+                          {messages.clearBoardFilter}
+                        </button>
+                      )}
+                      {boardFilterOptions.map((board) => {
+                        const isSelected = boardFilter.includes(board.name);
+
+                        return (
+                          <button
+                            key={board.code}
+                            type="button"
+                            role="option"
+                            aria-selected={isSelected}
+                            onClick={() => toggleBoardFilter(board.name)}
+                            className={cn(
+                              "flex h-7 w-full min-w-0 items-center gap-1.5 px-2 text-left transition-colors",
+                              isSelected ? "bg-brand/12 text-foreground" : "text-foreground hover:bg-muted"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "inline-flex size-3.5 shrink-0 items-center justify-center border",
+                                isSelected
+                                  ? "border-brand bg-brand text-brand-foreground"
+                                  : "border-border bg-background"
+                              )}
+                              aria-hidden
+                            >
+                              {isSelected ? <Check className="size-2.5" strokeWidth={3} /> : null}
+                            </span>
+                            <span
+                              className={cn(
+                                "min-w-0 flex-1 truncate leading-tight",
+                                isEnglish ? "text-[10.5px]" : "text-[12px]"
+                              )}
+                            >
+                              {board.name}
+                            </span>
+                            <span
+                              className={cn(
+                                "shrink-0 tabular-nums text-muted-foreground",
+                                isEnglish ? "text-[10px]" : "text-[11px]"
+                              )}
+                            >
+                              {board.stockCount}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>,
+                    document.body
+                  )}
               </div>
 
               <div className={cn("mt-1.5 border border-border bg-muted/18 p-1.5", isEnglish && "mt-1 p-[5px]")}>
