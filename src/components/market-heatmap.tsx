@@ -85,6 +85,7 @@ import {
   heatmapPeriodKeys,
   isHeatmapPeriodKey,
   isMarketKey,
+  marketKeys,
   type HeatmapPeriodKey,
   type MarketKey,
   type MarketOverviewResponse,
@@ -191,7 +192,7 @@ type SettingsTab = "appearance" | "shortcuts" | "help" | "project";
 type HeatmapSizeMode = "marketCap" | "turnover";
 
 const refreshIntervalMs = 8000;
-const marketOptions: MarketKey[] = ["all", "sse", "szse", "hs300", "zza50", "zza500", "cyb", "kcb"];
+const marketOptions: MarketKey[] = [...marketKeys];
 const periodOptions: HeatmapPeriodKey[] = [...heatmapPeriodKeys];
 const allBoardsValue = "__all__";
 const allTrendsValue = "__all__";
@@ -776,6 +777,7 @@ function getMarketLabel(messages: HeatmapMessages, market: MarketKey) {
   if (market === "hs300") return messages.markets.hs300;
   if (market === "zza50") return messages.markets.zza50;
   if (market === "zza500") return messages.markets.zza500;
+  if (market === "main") return messages.markets.main;
   if (market === "cyb") return messages.markets.cyb;
   return messages.markets.kcb;
 }
@@ -788,6 +790,7 @@ function getCompactMarketLabel(messages: HeatmapMessages, market: MarketKey, loc
     if (market === "hs300") return "CSI 300";
     if (market === "zza50") return "CSI A50";
     if (market === "zza500") return "CSI A500";
+    if (market === "main") return "Main Board";
     if (market === "cyb") return "ChiNext";
     return "STAR";
   }

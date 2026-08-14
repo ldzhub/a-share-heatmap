@@ -6,7 +6,7 @@ import {
   type Zza50ConstituentStatus,
 } from "@/lib/market-constituents";
 
-export const marketKeys = ["all", "sse", "szse", "hs300", "zza50", "zza500", "cyb", "kcb"] as const;
+export const marketKeys = ["all", "sse", "szse", "hs300", "zza50", "zza500", "main", "cyb", "kcb"] as const;
 
 export type MarketKey = (typeof marketKeys)[number];
 
@@ -175,18 +175,19 @@ const upDownDistributionUrl = "https://dq.10jqka.com.cn/fuyao/up_down_distributi
 const turnoverSummaryUrl =
   "https://dq.10jqka.com.cn/fuyao/market_analysis_api/chart/v1/get_chart_data?chart_key=turnover_minute";
 
-const marketIndexSymbols: Record<MarketKey, string> = {
+const marketIndexSymbols: Partial<Record<MarketKey, string>> = {
   all: "sz399317", // 国证 A 指：覆盖 A 股整体走势，比用个股池加权更接近“全部 A 股”指数口径。
   sse: "sh000001", // 上证指数：更符合用户查看“上证”大盘涨跌时的通用口径。
   szse: "sz399107", // 深证 A 指
   hs300: "sh000300",
   zza50: "zz930050", // 中证 A50：采用中证指数口径，聚焦各行业龙头。
   zza500: "sh000510",
+  // 沪深主板没有单一权威全市场指数，侧栏涨跌回退到成分股市值加权。
   cyb: "sz399006",
   kcb: "sh000680", // 科创综指，比科创 50 更贴近“科创板”整体口径。
 };
 
-const marketIndexSecids: Record<MarketKey, string> = {
+const marketIndexSecids: Partial<Record<MarketKey, string>> = {
   all: "0.399317",
   sse: "1.000001",
   szse: "0.399107",
@@ -196,6 +197,8 @@ const marketIndexSecids: Record<MarketKey, string> = {
   cyb: "0.399006",
   kcb: "1.000680",
 };
+
+const marketIndexCount = Object.keys(marketIndexSymbols).length;
 
 const sinaRequestHeaders = {
   Referer: "https://finance.sina.com.cn/",
@@ -432,6 +435,23 @@ function inMarket(
     return stock.exchange === "SZ";
   }
 
+  if (market === "main") {
+    // 沪深主板：排除创业板（30x）、科创板（688/689）和北交所。
+    if (stock.exchange === "BJ") {
+      return false;
+    }
+
+    if (stock.exchange === "SH" && (stock.code.startsWith("688") || stock.code.startsWith("689"))) {
+      return false;
+    }
+
+    if (stock.exchange === "SZ" && stock.code.startsWith("30")) {
+      return false;
+    }
+
+    return stock.exchange === "SH" || stock.exchange === "SZ";
+  }
+
   if (market === "cyb") {
     return stock.exchange === "SZ" && stock.code.startsWith("300");
   }
@@ -472,6 +492,9 @@ const staticStocksByMarket: Record<Exclude<MarketKey, "zza50">, StockSnapshot[]>
   ),
   zza500: baselineStocks.filter((stock) =>
     inMarket(stock, "zza500", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
+  ),
+  main: baselineStocks.filter((stock) =>
+    inMarket(stock, "main", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
   ),
   cyb: baselineStocks.filter((stock) =>
     inMarket(stock, "cyb", baselineZza50FallbackSet, baselineHs300Set, baselineZza500Set)
@@ -884,7 +907,7 @@ async function fetchEastmoneyMarketIndexSnapshotFromClist(): Promise<MarketIndex
     Object.assign(summaries, parseEastmoneyIndexBatch(payload));
   }
 
-  if (Object.keys(summaries).length < marketKeys.length * 0.75) {
+  if (Object.keys(summaries).length < marketIndexCount * 0.75) {
     throw new Error("Eastmoney index snapshot is incomplete");
   }
 
@@ -897,10 +920,10 @@ async function fetchEastmoneyMarketIndexSnapshotFromClist(): Promise<MarketIndex
 }
 
 async function fetchEastmoneyMarketIndexSnapshotFromUlist(): Promise<MarketIndexSnapshot> {
-  const payload = await fetchEastmoneyUlistBatch(Object.values(marketIndexSecids));
+  const payload = await fetchEastmoneyUlistBatch(Object.values(marketIndexSecids).filter(Boolean));
   const summaries = parseEastmoneyIndexBatch(payload);
 
-  if (Object.keys(summaries).length < marketKeys.length * 0.75) {
+  if (Object.keys(summaries).length < marketIndexCount * 0.75) {
     throw new Error("Eastmoney ulist index snapshot is incomplete");
   }
 
@@ -921,7 +944,9 @@ async function fetchEastmoneyMarketIndexSnapshotFromRemote(): Promise<MarketInde
 }
 
 async function fetchSinaMarketIndexSnapshotFromRemote(): Promise<MarketIndexSnapshot> {
-  const symbols = Object.values(marketIndexSymbols).map((symbol) => `s_${symbol}`);
+  const symbols = Object.values(marketIndexSymbols)
+    .filter(Boolean)
+    .map((symbol) => `s_${symbol}`);
   const response = await fetch(`${sinaQuoteBaseUrl}${symbols.join(",")}`, {
     headers: sinaRequestHeaders,
     next: { revalidate: 0 },
@@ -935,7 +960,7 @@ async function fetchSinaMarketIndexSnapshotFromRemote(): Promise<MarketIndexSnap
   const rawText = Buffer.from(await response.arrayBuffer()).toString("latin1");
   const summaries = parseSinaIndexBatch(rawText);
 
-  if (Object.keys(summaries).length < marketKeys.length * 0.75) {
+  if (Object.keys(summaries).length < marketIndexCount * 0.75) {
     throw new Error("Sina index snapshot is incomplete");
   }
 
