@@ -13,7 +13,7 @@
     <img src="https://img.shields.io/badge/在线预览-dapan.app-1f6feb?style=for-the-badge&logo=vercel&logoColor=white" alt="在线预览" />
   </a>
   &nbsp;
-  <a href="https://vercel.com/new/clone?repository-url=https://github.com/wenyuanw/a-share-heatmap">
+  <a href="https://vercel.com/new/clone?repository-url=https://github.com/ldzhub/a-share-heatmap">
     <img src="https://img.shields.io/badge/一键部署-Deploy%20with%20Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="一键部署到 Vercel" />
   </a>
 </p>
@@ -116,7 +116,7 @@ WebMCP 仍处于实验阶段。开发测试时，可以打开 `chrome://flags/#e
 
 ## 一键部署
 
-点击上方 Vercel 按钮后，会直接基于 [wenyuanw/a-share-heatmap](https://github.com/wenyuanw/a-share-heatmap) 创建并部署项目。
+点击上方 Vercel 按钮后，会直接基于 [ldzhub/a-share-heatmap](https://github.com/ldzhub/a-share-heatmap) 创建并部署项目。
 
 也可以在 Vercel 控制台导入仓库。项目无需配置环境变量。
 

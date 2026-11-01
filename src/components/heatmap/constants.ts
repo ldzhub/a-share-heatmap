@@ -49,7 +49,7 @@ export const minZoom = 1;
 export const desktopMaxZoom = 8;
 export const mobileMaxZoom = 12;
 export const flatThreshold = 0.1;
-export const githubProjectUrl = "https://github.com/wenyuanw/a-share-heatmap";
+export const githubProjectUrl = "https://github.com/ldzhub/a-share-heatmap";
 export const authorEmail = "hi@wenyuanw.me";
 export const authorMailto = `mailto:${authorEmail}`;
 

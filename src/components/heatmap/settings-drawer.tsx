@@ -864,7 +864,7 @@ export function SettingsDrawer({
                         rel="noopener noreferrer"
                         className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-brand transition-colors hover:text-brand/80"
                       >
-                        github.com/wenyuanw/a-share-heatmap
+                        github.com/ldzhub/a-share-heatmap
                         <ExternalLink className="size-3.5 opacity-80" />
                       </a>
                     </div>
