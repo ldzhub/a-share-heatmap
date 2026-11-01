@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-REGISTRY="${DOCKER_REGISTRY:-XXXXXX}"
+REGISTRY="${DOCKER_REGISTRY:-registry.mutus.site}"
 IMAGE_REPO="${1:-a-share-heatmap}"
 IMAGE_TAG="${2:-latest}"
 FULL_IMAGE="${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"
