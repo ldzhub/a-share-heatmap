@@ -1,22 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getTreemapData, isHeatmapPeriodKey, isMarketKey } from "@/lib/market-heatmap";
+import {
+  getTreemapData,
+  getTreemapDataByCodes,
+  isHeatmapPeriodKey,
+  isMarketKey,
+  parseStockCodeList,
+  PeriodDataUnavailableError,
+} from "@/lib/market-heatmap";
 
 export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   const marketParam = request.nextUrl.searchParams.get("market") ?? "all";
   const periodParam = request.nextUrl.searchParams.get("period") ?? "day";
-
-  if (!isMarketKey(marketParam)) {
-    return NextResponse.json(
-      {
-        success: false,
-        message: `Invalid market: ${marketParam}`,
-      },
-      { status: 400 }
-    );
-  }
+  const codes = parseStockCodeList(request.nextUrl.searchParams.get("codes"));
 
   if (!isHeatmapPeriodKey(periodParam)) {
     return NextResponse.json(
@@ -28,8 +26,32 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  if (codes.length === 0 && !isMarketKey(marketParam)) {
+    return NextResponse.json(
+      {
+        success: false,
+        message: `Invalid market: ${marketParam}`,
+      },
+      { status: 400 }
+    );
+  }
+
   try {
-    const data = await getTreemapData(marketParam, periodParam);
+    const data = codes.length > 0
+      ? await getTreemapDataByCodes(codes, periodParam)
+      : isMarketKey(marketParam)
+        ? await getTreemapData(marketParam, periodParam)
+        : null;
+
+    if (!data) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Invalid market: ${marketParam}`,
+        },
+        { status: 400 }
+      );
+    }
     const response = NextResponse.json(data);
     response.headers.set("Cache-Control", "public, s-maxage=6, stale-while-revalidate=10");
 
@@ -40,7 +62,7 @@ export async function GET(request: NextRequest) {
         success: false,
         message: error instanceof Error ? error.message : "Failed to load treemap data",
       },
-      { status: 502 }
+      { status: error instanceof PeriodDataUnavailableError ? 503 : 502 }
     );
   }
 }
